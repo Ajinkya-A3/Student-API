@@ -17,7 +17,13 @@ class Settings(BaseSettings):
 
     DEBUG: bool = Field(default=False)
 
-    LOG_LEVEL: str = Field(default="INFO")
+    LOG_LEVEL: Literal[
+    "DEBUG",
+    "INFO",
+    "WARNING",
+    "ERROR",
+    "CRITICAL",
+    ] = "INFO"
 
     DATABASE_URL: str
 
