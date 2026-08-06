@@ -1,0 +1,59 @@
+SHELL := /bin/bash
+
+PYTHON      ?= python3.14
+VENV        := .venv
+VENV_BIN    := $(VENV)/bin
+PIP         := $(VENV_BIN)/pip
+UVICORN     := $(VENV_BIN)/uvicorn
+ALEMBIC     := $(VENV_BIN)/alembic
+PYTEST      := $(VENV_BIN)/pytest
+
+APP_MODULE  := app.main:app
+HOST        ?= 0.0.0.0
+PORT        ?= 8000
+
+.DEFAULT_GOAL := help
+
+.PHONY: help venv install build migrate migrate-down \
+        revision run dev test test-cov lint clean
+
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+
+venv: ## Create the virtual environment
+	$(PYTHON) -m venv $(VENV)
+
+install: venv ## Create venv and install all dependencies
+	$(PIP) install --upgrade pip
+	$(PIP) install -r requirements.txt
+
+build: install ## Alias for install (satisfies "build" step)
+
+migrate: ## Apply all pending Alembic migrations (upgrade to head)
+	$(ALEMBIC) upgrade head
+
+migrate-down: ## Roll back the last Alembic migration
+	$(ALEMBIC) downgrade -1
+
+revision: ## Autogenerate a new Alembic revision. Usage: make revision m="add index"
+	$(ALEMBIC) revision --autogenerate -m "$(m)"
+
+run: ## Run the API with production-style uvicorn (no reload)
+	$(UVICORN) $(APP_MODULE) --host $(HOST) --port $(PORT)
+
+dev: ## Run the API locally with hot-reload
+	$(UVICORN) $(APP_MODULE) --host $(HOST) --port $(PORT) --reload
+
+test: ## Run the unit test suite
+	$(PYTEST) -v
+
+test-cov: ## Run tests with coverage report
+	$(PYTEST) --cov=app --cov-report=term-missing
+
+lint: ## Byte-compile check (fails fast on syntax errors)
+	$(VENV_BIN)/python -m py_compile $$(find app -name '*.py')
+
+clean: ## Remove venv, caches and pyc files
+	rm -rf $(VENV) .pytest_cache .coverage
+	find . -type d -name '__pycache__' -exec rm -rf {} +
