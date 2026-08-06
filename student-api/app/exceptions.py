@@ -7,6 +7,22 @@ from fastapi.responses import JSONResponse
 from app.logger import logger
 
 
+def _summarize_errors(exc: RequestValidationError) -> list[dict]:
+    """
+    Trim Pydantic's raw error list down to what's actually useful in a
+    log line: type, field path, and message. Drops `input` (can be
+    large/sensitive) and `ctx` (implementation detail, redundant with msg).
+    """
+    return [
+        {
+            "type": err["type"],
+            "loc": ".".join(str(part) for part in err["loc"]),
+            "msg": err["msg"],
+        }
+        for err in exc.errors()
+    ]
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """
     Register global exception handlers.
@@ -24,15 +40,26 @@ def register_exception_handlers(app: FastAPI) -> None:
         handler they produce no structured log at all.
         """
 
+        errors = _summarize_errors(exc)
+
+        # A malformed body (bad JSON) vs a well-formed body with
+        # invalid field values are different failure modes worth
+        # telling apart at a glance.
+        event = (
+            "request_body_malformed"
+            if any(err["type"] == "json_invalid" for err in errors)
+            else "request_validation_failed"
+        )
+
         logger.warning(
-            "request_validation_failed",
+            event,
             method=request.method,
             path=request.url.path,
-            errors=exc.errors(),
+            errors=errors,
         )
 
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
                 "detail": exc.errors(),
             },
