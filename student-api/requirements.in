@@ -1,2 +1,24 @@
+# Web framework
+fastapi
+uvicorn
+
+# Database
+psycopg[binary]
+alembic
+
+# Configuration
 pydantic-settings
+
+# Validation
+email-validator
+
+# Logging
+python-json-logger
 structlog
+
+# Testing
+pytest
+pytest-cov
+
+# HTTP client (if used in your application/tests)
+httpx2
