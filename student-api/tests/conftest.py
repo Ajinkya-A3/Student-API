@@ -1,10 +1,14 @@
 import os
 
-# Settings.DATABASE_URL has no default, so it must exist before any
-# `app.*` module (which triggers app.config.settings) is imported.
-# Using SQLite here keeps the test suite fast and fully isolated from
-# the real Postgres instance used in dev/prod.
-os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+# Settings.DB_NAME / DB_USER / DB_PASSWORD have no defaults, so they must
+# exist before any `app.*` module (which triggers app.config.settings) is
+# imported. These values are never actually connected to - the real test
+# DB is the separate SQLite engine built below - they only need to exist
+# so Settings() doesn't raise a validation error at import time.
+os.environ.setdefault("DB_HOST", "unused")
+os.environ.setdefault("DB_NAME", "unused")
+os.environ.setdefault("DB_USER", "unused")
+os.environ.setdefault("DB_PASSWORD", "unused")
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 
