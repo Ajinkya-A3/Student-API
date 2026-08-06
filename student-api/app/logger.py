@@ -86,7 +86,6 @@ def setup_logger() -> None:
                 {
                     structlog.processors.CallsiteParameter.FILENAME,
                     structlog.processors.CallsiteParameter.FUNC_NAME,
-                    structlog.processors.CallsiteParameter.LINENO,
                 }
             ),
 

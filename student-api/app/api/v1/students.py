@@ -7,6 +7,7 @@ from fastapi import Response
 from fastapi import status
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -61,6 +62,17 @@ def create_student(
             status_code=status.HTTP_409_CONFLICT,
             detail="Student with this email already exists.",
         )
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+
+        logger.error(
+            "student_create_failed",
+            email=student.email,
+            error=str(exc),
+        )
+
+        raise
 
     logger.info(
         "student_created",
@@ -176,6 +188,17 @@ def update_student(
             detail="Student with this email already exists.",
         )
 
+    except SQLAlchemyError as exc:
+        db.rollback()
+
+        logger.error(
+            "student_update_failed",
+            student_id=str(student_id),
+            error=str(exc),
+        )
+
+        raise
+
     logger.info(
         "student_updated",
         student_id=str(student.id),
@@ -210,9 +233,20 @@ def delete_student(
             detail="Student not found.",
         )
 
-    db.delete(student)
+    try:
+        db.delete(student)
+        db.commit()
 
-    db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+
+        logger.error(
+            "student_delete_failed",
+            student_id=str(student_id),
+            error=str(exc),
+        )
+
+        raise
 
     logger.info(
         "student_deleted",
