@@ -12,9 +12,13 @@ APP_MODULE  := app.main:app
 HOST        ?= 0.0.0.0
 PORT        ?= 8000
 
+# docker-compose.yaml lives at the repo root, one level up from student-api/
+# where this Makefile is run from.
+COMPOSE_FILE := ../docker-compose.yaml
+
 .DEFAULT_GOAL := help
 
-.PHONY: help venv install build migrate migrate-down \
+.PHONY: help venv install build db-up db-down db-logs migrate migrate-down \
         revision run dev test test-cov lint clean
 
 help: ## Show this help
@@ -30,6 +34,18 @@ install: venv ## Create venv and install all dependencies
 
 build: install ## Alias for install (satisfies "build" step)
 
+db-up: ## Start the Postgres container in the background and wait until it's healthy
+	docker compose -f $(COMPOSE_FILE) up -d postgres
+	docker compose -f $(COMPOSE_FILE) exec postgres sh -c \
+		'until pg_isready -U postgres -d student_db > /dev/null 2>&1; do sleep 1; done'
+	@echo "Postgres is ready."
+
+db-down: ## Stop and remove the Postgres container (data volume is preserved)
+	docker compose -f $(COMPOSE_FILE) stop postgres
+
+db-logs: ## Tail the Postgres container's logs
+	docker compose -f $(COMPOSE_FILE) logs -f postgres
+
 migrate: ## Apply all pending Alembic migrations (upgrade to head)
 	$(ALEMBIC) upgrade head
 
@@ -42,7 +58,7 @@ revision: ## Autogenerate a new Alembic revision. Usage: make revision m="add in
 run: ## Run the API with production-style uvicorn (no reload)
 	$(UVICORN) $(APP_MODULE) --host $(HOST) --port $(PORT)
 
-dev: ## Run the API locally with hot-reload
+dev: db-up ## Start Postgres (if not already up), then run the API locally with hot-reload
 	$(UVICORN) $(APP_MODULE) --host $(HOST) --port $(PORT) --reload
 
 test: ## Run the unit test suite
