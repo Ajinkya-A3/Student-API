@@ -9,11 +9,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /build
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        build-essential \
-        libpq-dev && \
-    rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv /opt/venv
 
@@ -33,10 +28,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        libpq5 && \
-    rm -rf /var/lib/apt/lists/*
+
 
 RUN groupadd --gid 1001 appgroup && \
     useradd \
