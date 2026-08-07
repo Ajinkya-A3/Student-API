@@ -15,6 +15,7 @@ A Student CRUD REST API built with **FastAPI**, **SQLAlchemy 2.0**, **Alembic**,
 - [Postman collection](#postman-collection)
 - [Running the tests](#running-the-tests)
 - [Logging](#logging)
+- [Docker image](#docker-image)
 
 ## Why UUIDv7 for the primary key
 
@@ -70,7 +71,7 @@ Test-main/
 ```bash
 # 1. Clone and enter the API directory
 git clone <your-repo-url>
-cd Test-main/student-api
+cd student-api
 
 # 2. Create your local env file
 cp .env.example .env
@@ -215,3 +216,114 @@ Tests don't touch your dev/prod Postgres database at all. `tests/conftest.py` se
 ## Logging
 
 `app/logger.py` configures `structlog` to emit structured JSON logs: `DEBUG`/`INFO`/`WARNING` go to `stdout`, `ERROR`/`CRITICAL` go to `stderr`, with the minimum level controlled by `LOG_LEVEL`. Every request-handling code path (student created, not found, duplicate email, DB errors, unhandled exceptions, etc.) logs a structured event, and `app/exceptions.py` adds global handlers so even framework-level validation failures and unhandled exceptions produce a proper structured log line and a clean JSON error response instead of an unstructured stack trace.
+
+## Docker image
+
+The `Dockerfile` builds a small, non-root production image using a **two-stage build**: a `builder` stage that compiles/installs dependencies, and a `runtime` stage that only contains what's needed to actually run the app. Build with:
+
+```bash
+docker build -t student-api .
+docker run --env-file .env -p 8000:8000 student-api
+```
+
+### Stage 1 — `builder`
+
+```dockerfile
+FROM python:3.14-slim AS builder
+```
+`slim` (not the full `python:3.14` image, and not `alpine`) is the standard middle ground: it strips out compilers/docs/locales the full image ships with (much smaller, smaller attack surface), while still being a normal Debian base — unlike Alpine, which uses musl libc and regularly causes subtle breakage with C-extension Python packages (psycopg, cryptography, etc.) that expect glibc. `AS builder` names this stage so the runtime stage can selectively copy *only* its output later, instead of the whole stage.
+
+```dockerfile
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+```
+- `PYTHONDONTWRITEBYTECODE=1` — skips writing `.pyc` files. In a container the filesystem is rebuilt from scratch every run, so cached bytecode from a previous run is never reused anyway; writing it just wastes image layers and I/O.
+- `PYTHONUNBUFFERED=1` — makes `stdout`/`stderr` unbuffered, so log lines (your `structlog` JSON output) reach `docker logs`/`kubectl logs` immediately instead of sitting in a buffer — important for real-time log tailing and for logs not to appear to "hang" then dump all at once.
+- `PIP_DISABLE_PIP_VERSION_CHECK=1` — stops pip from making a network call on every invocation just to check if a newer pip exists. Pure build-speed/noise reduction.
+
+```dockerfile
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev && \
+    rm -rf /var/lib/apt/lists/*
+```
+- `build-essential` (gcc, make, etc.) and `libpq-dev` (Postgres client headers) are needed **only if `pip install` has to compile a package from C source**. This matters a lot for this specific project: it targets **Python 3.14**, which is extremely new — some packages (including `psycopg`, even the `[binary]` extra) may not yet publish a prebuilt wheel for 3.14 on every platform, in which case pip silently falls back to building from source. Without these two packages, that fallback would fail with a cryptic compiler-not-found or `pg_config: not found` error. Including them makes the build robust across architectures/wheel availability instead of only working by luck.
+- `--no-install-recommends` skips apt's "recommended but not required" extra packages — smaller layer, faster install.
+- `apt-get update && apt-get install ... && rm -rf /var/lib/apt/lists/*` **in one `RUN` line** (not three separate `RUN`s) is a deliberate Docker layer-caching detail: each `RUN` becomes one image layer, and a layer's contents are fixed once written. If `apt-get update` were its own layer, its cached index would go stale over time while still being reused by cache, and `rm -rf /var/lib/apt/lists/*` in a *later* layer wouldn't actually shrink the image — deleted files in a later layer don't remove the bytes from earlier layers, they just hide them. Chaining update → install → cleanup into a single `RUN`/single layer means the apt index never ends up baked into the image at all.
+
+```dockerfile
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+```
+Installing into an isolated venv (rather than system site-packages) means the runtime stage can grab dependencies with one clean `COPY --from=builder /opt/venv /opt/venv` — a single, well-defined directory — instead of having to figure out which files under `/usr/lib/python3.14/site-packages` belong to your app versus the base image.
+
+```dockerfile
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+```
+This is the key **layer-caching** decision in the whole file: `requirements.txt` is copied and installed *before* any application code is copied. Docker caches each layer keyed on its instruction + the content it touches. As long as `requirements.txt` hasn't changed, Docker reuses this (often slow, since it may compile things) layer from cache on every rebuild — even if every line of `app/` changed. If `COPY app ./app` happened before this `pip install`, any code change would bust the cache and force a full dependency reinstall every single build. `--no-cache-dir` tells pip itself not to keep its own download cache on disk — irrelevant to Docker's layer cache, just keeps this layer's size down since the cache would otherwise sit in the image unused.
+
+### Stage 2 — `runtime`
+
+```dockerfile
+FROM python:3.14-slim
+```
+Starts a **fresh** `slim` image — none of the builder stage's layers (compilers, `apt` cache, `libpq-dev` headers) carry over unless explicitly copied. This is the entire point of a multi-stage build: the final image only contains what's listed below, nothing used just to *get there*.
+
+```dockerfile
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libpq5 && \
+    rm -rf /var/lib/apt/lists/*
+```
+`libpq5` is the Postgres **client shared library** (as opposed to `libpq-dev`, which is the *development headers* used only at compile time). If `psycopg` ended up dynamically linked against `libpq` during the builder stage's install (the source-build fallback case described above), the runtime image needs this shared library present to actually load and run — without it you'd get an `ImportError`/`OSError` about a missing `.so` file the first time the app tries to open a DB connection. Note this is the *runtime* library only, not the dev headers — smaller and correct for a stage that doesn't compile anything itself.
+
+```dockerfile
+RUN groupadd --gid 1001 appgroup && \
+    useradd \
+        --uid 1001 \
+        --gid appgroup \
+        --create-home \
+        --shell /usr/sbin/nologin \
+        appuser
+```
+- Fixed, explicit `--gid 1001`/`--uid 1001` (rather than letting the OS auto-assign the next free ID) keeps the UID:GID stable and predictable across image rebuilds and across environments — this matters if you later pin `runAsUser: 1001` / `runAsGroup: 1001` in a Kubernetes `securityContext`, or if a mounted volume's file ownership needs to match the container's user consistently.
+- `--create-home` gives the user a real `/home/appuser`, which some libraries assume exists as a writable location for their own cache files (pip, some Python libs default to `~/.cache` for things like font/plot caches) — a defensive default that avoids obscure "permission denied writing to /nonexistent" errors later, at the cost of a few extra KB.
+- `--shell /usr/sbin/nologin` — this user can never get an interactive shell (e.g. via `docker exec -it ... bash` as this user, or if a vulnerability ever let something try to spawn a shell as it). Pure defense-in-depth; the container doesn't need this user to ever have shell access, so it's explicitly disabled.
+- **Why a non-root user at all**: by default, a process in a container that never sets `USER` runs as `root` — and root inside a container that escapes its isolation (via a kernel exploit, misconfiguration, etc.) is root on the host's view of that container. Running as an unprivileged, fixed UID is standard container-hardening practice and is often an outright requirement in Kubernetes clusters with Pod Security Standards / OPA policies enforcing "no root containers."
+
+```dockerfile
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+```
+`COPY --from=builder` pulls **only** the `/opt/venv` directory out of the builder stage — the installed dependencies — and none of the compiler toolchain, apt cache, or intermediate files that produced them. This single line is what actually delivers the multi-stage build's size/security win.
+
+```dockerfile
+COPY --chown=appuser:appgroup alembic ./alembic
+COPY --chown=appuser:appgroup alembic.ini .
+COPY --chown=appuser:appgroup app ./app
+```
+Two things going on here:
+- **`--chown=appuser:appgroup`** sets file ownership *during* the copy, in the same layer. Doing `COPY` then a separate `RUN chown -R ...` would create the files as root-owned in one layer and then rewrite ownership in a second layer — Docker's copy-on-write filesystem means the "original root-owned" bytes are still physically present in the image, just hidden, silently bloating the image. A single `--chown` copy avoids that entirely.
+- **Ordering — `alembic` before `app`** — this is a second layer-caching decision, same principle as `requirements.txt` earlier but applied to source code: `alembic/` (schema migrations) changes far less often during day-to-day feature work than `app/` (route/business logic) does. Putting the less-frequently-changing directory first means routine `app/` edits only bust the cache for the `COPY app` layer and everything after it — the `alembic` copy layer stays cached across most rebuilds.
+
+```dockerfile
+USER 1001:1001
+```
+Switches the *active* user for every instruction from here on, and — critically — for the container process itself at `docker run` time. Everything before this line (installing `libpq5`, creating the user, copying files) still happens as root, because root privileges are needed to install packages and `chown` files; this line is placed as late as possible so the actual running application has the minimum possible privilege.
+
+```dockerfile
+EXPOSE 8000
+```
+Purely documentation/metadata — it doesn't actually publish the port (`-p 8000:8000` on `docker run` does that). It's there so `docker inspect`, orchestrators, and humans reading the file know which port the app listens on.
+
+```dockerfile
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+The **exec form** (a JSON array, not a bare string like `CMD uvicorn app.main:app ...`) matters: exec form runs `uvicorn` directly as PID 1, so it receives `SIGTERM` directly when Docker/Kubernetes stops the container, and can shut down its FastAPI `lifespan` cleanly. The shell form (`CMD uvicorn ...`) would instead run `/bin/sh -c "uvicorn ..."`, making `sh` PID 1 and `uvicorn` a child process — signals go to the shell, not uvicorn, which commonly causes containers to hang on shutdown until a hard `SIGKILL` timeout.
+
+### Net effect
+
+Two things drive the optimization here: **layer caching** (dependencies installed before code is copied, and less-frequently-changed code copied before more-frequently-changed code, so routine rebuilds are fast) and **image leanness/security** (multi-stage build discards the compiler toolchain and apt cache entirely, the final image only has the runtime-necessary `libpq5`, and the app runs as an unprivileged, fixed-UID user with no shell access).
