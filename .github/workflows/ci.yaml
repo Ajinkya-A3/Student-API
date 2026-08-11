@@ -113,8 +113,11 @@ jobs:
       - name: Run tests (make test)
         run: make test
 
-      - name: Code linting (make lint)
-        run: make lint
+      - name: Install flake8
+        run: .venv/bin/pip install flake8
+
+      - name: Lint with flake8
+        run: .venv/bin/flake8 app
 
   # =========================================================
   # 4️⃣ DOCKER LOGIN → BUILD → TRIVY SCAN → PUSH (GATED)
