@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from prometheus_fastapi_instrumentator import Instrumentator          
+from prometheus_fastapi_instrumentator import Instrumentator
 from app.api.v1.health import router as health_router
 from app.api.v1.students import router as student_router
 from app.config import settings
