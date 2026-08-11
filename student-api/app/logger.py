@@ -1,6 +1,5 @@
 import logging
 import sys
-from typing import Literal
 import structlog
 
 from app.config import settings
