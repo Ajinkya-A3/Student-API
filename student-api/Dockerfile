@@ -16,7 +16,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    # runtime never needs pip/setuptools/wheel — strip them from the venv
+    pip uninstall -y pip setuptools wheel
 
 
 ############################
@@ -36,7 +38,11 @@ RUN groupadd --gid 1001 appgroup && \
         --gid appgroup \
         --create-home \
         --shell /usr/sbin/nologin \
-        appuser
+        appuser && \
+    # strip pip/setuptools shipped by the base image's system Python too
+    rm -rf /usr/local/lib/python3.14/site-packages/pip* \
+           /usr/local/lib/python3.14/site-packages/setuptools* \
+           /usr/local/bin/pip*
 
 WORKDIR /app
 
