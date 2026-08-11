@@ -67,8 +67,9 @@ test: ## Run the unit test suite
 test-cov: ## Run tests with coverage report
 	$(PYTEST) --cov=app --cov-report=term-missing
 
-lint: ## Byte-compile check (fails fast on syntax errors)
-	$(VENV_BIN)/python -m py_compile $$(find app -name '*.py')
+lint: ## Install flake8 and run linting
+   	$(PIP) install flake8
+   	$(VENV_BIN)/flake8 app
 
 clean: ## Remove venv, caches and pyc files
 	rm -rf $(VENV) .pytest_cache .coverage
