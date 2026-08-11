@@ -51,6 +51,10 @@ pluggy==1.6.0
     # via
     #   pytest
     #   pytest-cov
+prometheus-client==0.26.0
+    # via prometheus-fastapi-instrumentator
+prometheus-fastapi-instrumentator==8.1.0
+    # via -r requirements.in
 psycopg[binary]==3.3.4
     # via -r requirements.in
 psycopg-binary==3.3.4
@@ -78,7 +82,9 @@ python-json-logger==4.1.0
 sqlalchemy==2.0.51
     # via alembic
 starlette==1.4.1
-    # via fastapi
+    # via
+    #   fastapi
+    #   prometheus-fastapi-instrumentator
 structlog==26.1.0
     # via -r requirements.in
 truststore==0.10.4

@@ -22,3 +22,6 @@ pytest-cov
 
 # HTTP client (if used in your application/tests)
 httpx2
+
+# Metrics
+prometheus-fastapi-instrumentator

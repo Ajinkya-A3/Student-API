@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-
+from prometheus_fastapi_instrumentator import Instrumentator          
 from app.api.v1.health import router as health_router
 from app.api.v1.students import router as student_router
 from app.config import settings
@@ -48,6 +48,14 @@ register_exception_handlers(app)
 # Register API routers
 app.include_router(health_router)
 app.include_router(student_router)
+
+# ADDED: Prometheus instrumentation — must be called after routers are
+# registered so it can introspect all routes, and before app startup.
+Instrumentator().instrument(app).expose(
+    app,
+    endpoint="/metrics",
+    include_in_schema=False,   # keeps it out of your OpenAPI/Swagger docs
+)
 
 
 @app.get(
