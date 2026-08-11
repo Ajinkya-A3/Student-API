@@ -1,0 +1,202 @@
+name: student-api-ci
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'student-api/**'
+  pull_request:
+    paths:
+      - 'student-api/**'
+  workflow_dispatch: {}   # manual trigger
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+
+# =========================================================
+# JOBS
+# =========================================================
+jobs:
+
+  # =========================================================
+  # 1️⃣ GITLEAKS — FAIL FAST ON SECRETS
+  # =========================================================
+  gitleaks:
+    name: Gitleaks Secret Scan
+    runs-on: ubuntu-latest   # swap to `self-hosted` once your runner is registered
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # =========================================================
+  # 2️⃣ SEMGREP CE (OSS) — CODE SECURITY SCAN
+  # =========================================================
+  semgrep:
+    name: semgrep-oss/scan
+    runs-on: ubuntu-latest
+    needs: gitleaks
+
+    container:
+      image: semgrep/semgrep
+
+    if: github.actor != 'dependabot[bot]'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Extract Repo, Branch & Commit
+        run: |
+          echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+          echo "BRANCH_NAME=$(echo ${GITHUB_REF_NAME} | sed 's/\//-/g')" >> $GITHUB_ENV
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: Run Semgrep CE Scan (JSON + MD)
+        run: |
+          semgrep scan \
+            --config auto \
+            --json \
+            --output semgrep-${REPO_NAME}-${BRANCH_NAME}-${SHORT_SHA}.json
+
+          echo "# Semgrep Security Report" > semgrep-${REPO_NAME}-${BRANCH_NAME}-${SHORT_SHA}.md
+          echo "" >> semgrep-${REPO_NAME}-${BRANCH_NAME}-${SHORT_SHA}.md
+
+          jq -r '
+            .results[]
+            | "## \(.check_id)\n**Severity:** \(.extra.severity)\n**File:** \(.path):\(.start.line)\n\n\(.extra.message)\n"
+          ' semgrep-${REPO_NAME}-${BRANCH_NAME}-${SHORT_SHA}.json \
+            >> semgrep-${REPO_NAME}-${BRANCH_NAME}-${SHORT_SHA}.md
+
+      - name: Upload Semgrep Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-${{ env.REPO_NAME }}-${{ env.BRANCH_NAME }}-${{ env.SHORT_SHA }}
+          path: |
+            semgrep-${{ env.REPO_NAME }}-${{ env.BRANCH_NAME }}-${{ env.SHORT_SHA }}.json
+            semgrep-${{ env.REPO_NAME }}-${{ env.BRANCH_NAME }}-${{ env.SHORT_SHA }}.md
+
+  # =========================================================
+  # 3️⃣ BUILD API → TEST → LINT
+  # =========================================================
+  build-test-lint:
+    name: Build, Test & Lint
+    runs-on: ubuntu-latest
+    needs: semgrep
+
+    defaults:
+      run:
+        working-directory: student-api
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Build API (venv + install deps)
+        run: make build
+
+      - name: Run tests (make test)
+        run: make test
+
+      - name: Code linting (make lint)
+        run: make lint
+
+  # =========================================================
+  # 4️⃣ DOCKER LOGIN → BUILD → TRIVY SCAN → PUSH (GATED)
+  # =========================================================
+  # docker-build-scan-push:
+  #   name: Docker Build, Scan & Push
+  #   runs-on: ubuntu-latest
+  #   needs: build-test-lint
+
+  #   defaults:
+  #     run:
+  #       working-directory: student-api
+
+  #   env:
+  #     IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/student-api
+
+  #   steps:
+  #     - name: Checkout Code
+  #       uses: actions/checkout@v4
+
+  #     - name: Extract Repo, Branch & Commit
+  #       run: |
+  #         echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+  #         echo "BRANCH_NAME=${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
+  #         echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+  #     - name: Set up QEMU
+  #       uses: docker/setup-qemu-action@v3
+
+  #     - name: Set up Docker Buildx
+  #       uses: docker/setup-buildx-action@v3
+
+  #     - name: Docker Login
+  #       uses: docker/login-action@v3
+  #       with:
+  #         username: ${{ secrets.DOCKERHUB_USERNAME }}
+  #         password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  #     # Build locally first (no push) so Trivy can scan before anything ships
+  #     - name: Build Docker Image (local)
+  #       uses: docker/build-push-action@v6
+  #       with:
+  #         context: ./student-api
+  #         platforms: linux/amd64
+  #         load: true
+  #         tags: ${{ env.IMAGE }}:${{ env.SHORT_SHA }}
+
+  #     - name: Run Trivy vulnerability scanner
+  #       uses: aquasecurity/trivy-action@v0.34.0
+  #       with:
+  #         version: v0.69.2
+  #         image-ref: ${{ env.IMAGE }}:${{ env.SHORT_SHA }}
+  #         scanners: vuln
+  #         format: table
+  #         output: trivy-${{ env.REPO_NAME }}-${{ env.BRANCH_NAME }}-${{ env.SHORT_SHA }}.txt
+  #         exit-code: 1
+  #         ignore-unfixed: true
+  #         severity: CRITICAL,HIGH
+
+  #     - name: Upload Trivy Report
+  #       if: always()
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: trivy-${{ env.REPO_NAME }}-${{ env.BRANCH_NAME }}-${{ env.SHORT_SHA }}
+  #         path: trivy-${{ env.REPO_NAME }}-${{ env.BRANCH_NAME }}-${{ env.SHORT_SHA }}.txt
+
+  #     # Only pushes if Trivy passed (job would already have failed otherwise)
+  #     - name: Push Docker Image
+  #       if: success()
+  #       uses: docker/build-push-action@v6
+  #       with:
+  #         context: ./student-api
+  #         platforms: linux/amd64
+  #         push: true
+  #         tags: |
+  #           ${{ env.IMAGE }}:latest
+  #           ${{ env.IMAGE }}:${{ env.SHORT_SHA }}
+
+  #     - name: Print Summary
+  #       if: success()
+  #       run: |
+  #         echo "Image pushed:"
+  #         echo " - ${{ env.IMAGE }}:latest"
+  #         echo " - ${{ env.IMAGE }}:${{ env.SHORT_SHA }}"
+  #         echo "Security reports uploaded (Gitleaks + Semgrep + Trivy)"
