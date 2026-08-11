@@ -68,8 +68,8 @@ test-cov: ## Run tests with coverage report
 	$(PYTEST) --cov=app --cov-report=term-missing
 
 lint: ## Install flake8 and run linting
-   	$(PIP) install flake8
-   	$(VENV_BIN)/flake8 app
+	$(PIP) install flake8
+	$(VENV_BIN)/flake8 app
 
 clean: ## Remove venv, caches and pyc files
 	rm -rf $(VENV) .pytest_cache .coverage
