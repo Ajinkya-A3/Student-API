@@ -24,9 +24,6 @@ Vagrant.configure("2") do |config|
   # --- Networking ---
   config.vm.network "forwarded_port", guest: 8080, host: 8080, host_ip: "0.0.0.0"
 
-  # Optional fixed IP on the libvirt private network, useful for debugging
-  # from inside the EC2 host itself (e.g. curl http://192.168.121.10:8080).
-  config.vm.network "private_network", ip: "192.168.121.10"
 
   # libvirt doesn't support VirtualBox-style shared folders.
   # rsync is one-way (host -> guest) and syncs on `vagrant up` / `vagrant
@@ -43,5 +40,18 @@ Vagrant.configure("2") do |config|
     cd /vagrant
     su vagrant -c "docker compose pull"
     su vagrant -c "docker compose up -d"
+
+    echo "Waiting for app1 to be healthy before running migrations..."
+    for i in $(seq 1 30); do
+      status=$(docker inspect --format='{{.State.Health.Status}}' student-api-1 2>/dev/null || echo "starting")
+      if [ "$status" = "healthy" ]; then
+        echo "app1 is healthy, running migrations"
+        break
+      fi
+      echo "  app1 status: $status ($i/30)"
+      sleep 3
+    done
+
+    su vagrant -c "docker compose exec -T app1 alembic upgrade head"
   SHELL
 end
