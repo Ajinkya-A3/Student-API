@@ -17,9 +17,11 @@ support (Step 1 below).
   `modify-instance-cpu-options` is a recent addition — anything older
   (including the commonly pre-installed v2.24.x) will fail with
   `Unknown options: --nested-virtualization`. Check your version:
+
   ```bash
   aws --version
   ```
+
   If it's older, update via the official installer
   (https://awscli.amazonaws.com/AWSCLIV2.msi on Windows, or the Linux/Mac
   installer from AWS docs) and reopen your terminal before continuing.
@@ -31,6 +33,7 @@ explicit CPU option, and it can only be changed while the instance is
 **stopped**.
 
 Check current status:
+
 ```bash
 aws ec2 describe-instances \
   --instance-ids <your-instance-id> \
@@ -39,6 +42,7 @@ aws ec2 describe-instances \
 ```
 
 If it shows `None` or `disabled`:
+
 ```bash
 aws ec2 stop-instances --instance-ids <your-instance-id>
 aws ec2 wait instance-stopped --instance-ids <your-instance-id>
@@ -63,6 +67,7 @@ these two numbers to match your actual instance type's default core/thread
 layout if you're on something else.
 
 Confirm it stuck:
+
 ```bash
 aws ec2 describe-instances \
   --instance-ids <your-instance-id> \
@@ -73,6 +78,7 @@ Should show `enabled`.
 
 Then verify from **inside** the instance (SSH in first) that the CPU flag
 is actually visible to the guest OS, not just set at the AWS API level:
+
 ```bash
 egrep -c '(vmx|svm)' /proc/cpuinfo   # should print > 0
 ```
@@ -179,6 +185,7 @@ boot" for a while. If it's still retrying SSH past ~5 minutes, see
 Troubleshooting below.
 
 Check it's healthy:
+
 ```bash
 vagrant ssh -c "docker compose -f /vagrant/docker-compose.yml ps"
 vagrant ssh -c "curl -s http://localhost:8080/api/v1/health"
@@ -187,6 +194,7 @@ vagrant ssh -c "curl -s http://localhost:8080/api/v1/health"
 ## Step 6 — Test with Postman
 
 Point your Postman collection's base URL / environment variable at:
+
 ```
 http://<EC2-PUBLIC-IP>:8080
 ```
@@ -196,6 +204,7 @@ which load-balances across `app1`/`app2`.
 Every request should come back `200`. To confirm the load balancing is
 actually alternating between the two API containers, watch logs from both
 in separate terminals while the collection runs:
+
 ```bash
 vagrant ssh -c "docker logs -f student-api-1"
 vagrant ssh -c "docker logs -f student-api-2"
@@ -204,9 +213,11 @@ vagrant ssh -c "docker logs -f student-api-2"
 ## Does the Vagrantfile expose all ports, or just 8080?
 
 **Just 8080.** The only `forwarded_port` line in the Vagrantfile is:
+
 ```ruby
 config.vm.network "forwarded_port", guest: 8080, host: 8080, host_ip: "0.0.0.0"
 ```
+
 That's the only port bridged from the box out to the EC2 host (and from
 there, out to the internet via the Security Group). Postgres (`5432`) and
 the two API containers (`8000`) are declared with `expose:` in
