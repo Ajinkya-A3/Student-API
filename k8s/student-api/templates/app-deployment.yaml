@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.application.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.application.name }}
+spec:
+  replicas: {{ .Values.application.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Values.application.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.application.name }}
+    spec:
+      {{- if .Values.application.nodeAffinity.enabled }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: {{ .Values.application.nodeAffinity.key }}
+                    operator: In
+                    values:
+                      {{- range .Values.application.nodeAffinity.values }}
+                      - {{ . }}
+                      {{- end }}
+      {{- end }}
+      # NEW: pod-level security context (was absent in the raw manifest)
+      securityContext:
+        {{- toYaml .Values.application.podSecurityContext | nindent 8 }}
+      {{- if .Values.application.initContainer.enabled }}
+      # Migrations must complete before the app container starts.
+      initContainers:
+        - name: db-migrate
+          image: "{{ .Values.application.image.repository }}:{{ .Values.application.image.tag }}"
+          imagePullPolicy: {{ .Values.application.image.pullPolicy }}
+          command: {{ .Values.application.initContainer.command | toJson }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.application.envFrom.configMapName }}
+            - secretRef:
+                name: {{ .Values.application.envFrom.secretName }}
+          # NEW: container-level security context
+          securityContext:
+            {{- toYaml .Values.application.containerSecurityContext | nindent 12 }}
+          {{- if .Values.application.containerSecurityContext.readOnlyRootFilesystem }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          {{- end }}
+      {{- end }}
+      containers:
+        - name: {{ .Values.application.name }}
+          image: "{{ .Values.application.image.repository }}:{{ .Values.application.image.tag }}"
+          imagePullPolicy: {{ .Values.application.image.pullPolicy }}
+          # NEW: container-level security context (was absent in the raw manifest)
+          securityContext:
+            {{- toYaml .Values.application.containerSecurityContext | nindent 12 }}
+          ports:
+            - containerPort: {{ .Values.application.service.targetPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.application.envFrom.configMapName }}
+            - secretRef:
+                name: {{ .Values.application.envFrom.secretName }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.application.probes.path }}
+              port: {{ .Values.application.service.targetPort }}
+            initialDelaySeconds: {{ .Values.application.probes.initialDelaySeconds }}
+            periodSeconds: {{ .Values.application.probes.periodSeconds }}
+            timeoutSeconds: {{ .Values.application.probes.timeoutSeconds }}
+            failureThreshold: {{ .Values.application.probes.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.application.probes.path }}
+              port: {{ .Values.application.service.targetPort }}
+            initialDelaySeconds: {{ .Values.application.probes.initialDelaySeconds }}
+            periodSeconds: {{ .Values.application.probes.periodSeconds }}
+            timeoutSeconds: {{ .Values.application.probes.timeoutSeconds }}
+            failureThreshold: {{ .Values.application.probes.failureThreshold }}
+          resources:
+            {{- toYaml .Values.application.resources | nindent 12 }}
+          {{- if .Values.application.containerSecurityContext.readOnlyRootFilesystem }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          {{- end }}
+      {{- if .Values.application.containerSecurityContext.readOnlyRootFilesystem }}
+      # NEW: writable scratch space so the app/init container can still use
+      # /tmp even though the root filesystem is read-only.
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- end }}

@@ -1,0 +1,16 @@
+{{- if .Values.database.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.database.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.database.name }}
+spec:
+  clusterIP: None   # headless - required as the StatefulSet's serviceName
+  selector:
+    app: {{ .Values.database.name }}
+  ports:
+    - port: {{ .Values.database.service.port }}
+      targetPort: {{ .Values.database.service.port }}
+{{- end }}

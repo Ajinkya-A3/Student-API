@@ -1,0 +1,190 @@
+# -----------------------------------------------------------------------------
+# student-api Helm chart values
+# Converted from the raw manifests: namespace.yml, configmap.yml, secret.yml,
+# app-deployment.yml, app-service.yml, postgres-statefulset.yml,
+# postgres-service.yml, sc-wait.yaml, eso-components/*
+# -----------------------------------------------------------------------------
+
+namespace: student-api
+namespaceCreate: true
+
+# -----------------------------------------------------------------------------
+# Application 
+# -----------------------------------------------------------------------------
+application:
+  name: student-api
+  replicaCount: 1
+
+  image:
+    repository: at1asflame/student-api
+    tag: "c903951"
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8000
+
+  envFrom:
+    configMapName: student-api-config
+    secretName: student-api-secret
+
+  # NEW: pod-level security context (was missing in the raw manifest)
+  podSecurityContext:
+    runAsUser: 1001
+    runAsGroup: 1001
+    fsGroup: 1001
+    fsGroupChangePolicy: OnRootMismatch
+
+
+  containerSecurityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  nodeAffinity:
+    enabled: true
+    key: workload
+    values:
+      - application
+
+  probes:
+    path: /api/v1/health
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 5
+
+  initContainer:
+    enabled: true
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+
+  hpa:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    cpuUtilization: 70
+
+# -----------------------------------------------------------------------------
+# ConfigMap 
+# -----------------------------------------------------------------------------
+config:
+  enabled: true
+  name: student-api-config
+  data:
+    POSTGRES_DB: "student_db"
+    POSTGRES_USER: "postgres"
+    APP_NAME: "Student API"
+    APP_VERSION: "1.0.0"
+    APP_ENV: "production"
+    DEBUG: "false"
+    LOG_LEVEL: "INFO"
+    DB_DRIVER: "postgresql+psycopg"
+    DB_HOST: "postgres"
+    DB_PORT: "5432"
+    DB_NAME: "student_db"
+    DB_USER: "postgres"
+
+# -----------------------------------------------------------------------------
+# Secret (was secret.yml). Ignored when externalSecrets.enabled = true.
+# `data` values are PLAIN TEXT here - the template base64-encodes them for you.
+# CHANGE THIS DEFAULT PASSWORD before deploying to any real environment.
+# -----------------------------------------------------------------------------
+secret:
+  enabled: true
+  name: student-api-secret
+  data:
+    DB_PASSWORD: "postgres"
+
+# -----------------------------------------------------------------------------
+# PostgreSQL 
+# -----------------------------------------------------------------------------
+database:
+  enabled: true
+  name: postgres
+  replicas: 1
+
+  image:
+    repository: postgres
+    tag: "17"
+    pullPolicy: IfNotPresent
+
+  service:
+    port: 5432
+
+  persistence:
+    storageClassName: csi-hostpath-sc-wait
+    size: 1Gi
+    accessMode: ReadWriteOnce
+
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+  
+  podSecurityContext:
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    fsGroupChangePolicy: OnRootMismatch
+
+  # NEW: container-level security context (was missing in the raw manifest)
+  # readOnlyRootFilesystem is left false by default: the official postgres
+  # image writes to several paths at startup (initdb, locale/config files).
+  # Flip it to true if you want a fully read-only rootfs - the template will
+  # then mount writable emptyDirs at /tmp and /var/run/postgresql for you.
+  containerSecurityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: ["ALL"]
+
+  nodeAffinity:
+    enabled: true
+    key: workload
+    values:
+      - database
+
+  env:
+    configMapName: student-api-config
+    secretName: student-api-secret
+    dbNameKey: POSTGRES_DB
+    dbUserKey: POSTGRES_USER
+    dbPasswordKey: DB_PASSWORD
+
+# -----------------------------------------------------------------------------
+# StorageClass 
+# -----------------------------------------------------------------------------
+storageClass:
+  create: true
+  name: csi-hostpath-sc-wait
+  provisioner: hostpath.csi.k8s.io
+  reclaimPolicy: Delete
+  volumeBindingMode: WaitForFirstConsumer
+  allowVolumeExpansion: false
+
+
+# -----------------------------------------------------------------------------
+# External Secrets Operator (was eso-components/*)
+# When enabled: true, the chart deploys ClusterSecretStore + ExternalSecret
+# and the plain `secret.yml`-style Secret template is skipped, since the
+# ExternalSecret owns and creates the Secret from Vault instead.
+# -----------------------------------------------------------------------------
+externalSecrets:
+  enabled: true
+  

@@ -1,0 +1,106 @@
+{{- if .Values.database.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Values.database.name }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Values.database.name }}
+spec:
+  serviceName: {{ .Values.database.name }}
+  replicas: {{ .Values.database.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.database.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.database.name }}
+    spec:
+      {{- if .Values.database.nodeAffinity.enabled }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: {{ .Values.database.nodeAffinity.key }}
+                    operator: In
+                    values:
+                      {{- range .Values.database.nodeAffinity.values }}
+                      - {{ . }}
+                      {{- end }}
+      {{- end }}
+      # NEW: pod-level security context (was absent in the raw manifest)
+      securityContext:
+        {{- toYaml .Values.database.podSecurityContext | nindent 8 }}
+      containers:
+        - name: postgres
+          image: "{{ .Values.database.image.repository }}:{{ .Values.database.image.tag }}"
+          imagePullPolicy: {{ .Values.database.image.pullPolicy }}
+          # NEW: container-level security context (was absent in the raw manifest)
+          securityContext:
+            {{- toYaml .Values.database.containerSecurityContext | nindent 12 }}
+          ports:
+            - containerPort: {{ .Values.database.service.port }}
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.database.env.configMapName }}
+                  key: {{ .Values.database.env.dbNameKey }}
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.database.env.configMapName }}
+                  key: {{ .Values.database.env.dbUserKey }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.env.secretName }}
+                  key: {{ .Values.database.env.dbPasswordKey }}
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata   # avoids "lost+found" issues on fresh hostpath PVs
+            {{- if .Values.database.containerSecurityContext.readOnlyRootFilesystem }}
+            - name: tmp
+              mountPath: /tmp
+            - name: run-postgresql
+              mountPath: /var/run/postgresql
+            {{- end }}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.config.data.POSTGRES_USER | quote }}, "-d", {{ .Values.config.data.POSTGRES_DB | quote }}]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.config.data.POSTGRES_USER | quote }}, "-d", {{ .Values.config.data.POSTGRES_DB | quote }}]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.database.resources | nindent 12 }}
+      {{- if .Values.database.containerSecurityContext.readOnlyRootFilesystem }}
+      # NEW: writable scratch space required by postgres when the root
+      # filesystem is read-only (temp files + unix socket directory).
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: run-postgresql
+          emptyDir: {}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-storage
+      spec:
+        accessModes:
+          - {{ .Values.database.persistence.accessMode }}
+        storageClassName: {{ .Values.database.persistence.storageClassName }}
+        resources:
+          requests:
+            storage: {{ .Values.database.persistence.size }}
+{{- end }}
