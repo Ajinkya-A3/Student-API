@@ -23,7 +23,7 @@ server:
   dataStorage:
     enabled: true
     size: 1Gi
-    storageClass: csi-hostpath-sc    
+    storageClass: csi-hostpath-sc-wait  
   ha:
     enabled: false   # single replica - fine for bootcamp/minikube, not for real prod
 
