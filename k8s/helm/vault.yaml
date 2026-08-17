@@ -23,8 +23,7 @@ server:
   dataStorage:
     enabled: true
     size: 1Gi
-    storageClass: standard    # swap to csi-hostpath-sc if you moved postgres to it too
-
+    storageClass: csi-hostpath-sc    
   ha:
     enabled: false   # single replica - fine for bootcamp/minikube, not for real prod
 
