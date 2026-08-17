@@ -1,0 +1,106 @@
+---
+# Source: student-api/templates/app-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: student-api
+  namespace: student-api
+  labels:
+    app: student-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: student-api
+  template:
+    metadata:
+      labels:
+        app: student-api
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: workload
+                    operator: In
+                    values:
+                      - application
+      # NEW: pod-level security context (was absent in the raw manifest)
+      securityContext:
+        fsGroup: 1001
+        fsGroupChangePolicy: OnRootMismatch
+        runAsGroup: 1001
+        runAsUser: 1001
+      # Migrations must complete before the app container starts.
+      initContainers:
+        - name: db-migrate
+          image: "at1asflame/student-api:c903951"
+          imagePullPolicy: IfNotPresent
+          command: ["python","-m","alembic","upgrade","head"]
+          envFrom:
+            - configMapRef:
+                name: student-api-config
+            - secretRef:
+                name: student-api-secret
+          # NEW: container-level security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: student-api
+          image: "at1asflame/student-api:c903951"
+          imagePullPolicy: IfNotPresent
+          # NEW: container-level security context (was absent in the raw manifest)
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: student-api-config
+            - secretRef:
+                name: student-api-secret
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      # NEW: writable scratch space so the app/init container can still use
+      # /tmp even though the root filesystem is read-only.
+      volumes:
+        - name: tmp
+          emptyDir: {}
