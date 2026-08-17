@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: student-api
+  namespace: student-api
+  labels:
+    app: student-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: student-api
+  template:
+    metadata:
+      labels:
+        app: student-api
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: workload
+                    operator: In
+                    values:
+                      - application
+      # Migrations must complete before the app container starts.
+      initContainers:
+        - name: db-migrate
+          image: at1asflame/student-api:c903951   
+          command: ["python", "-m", "alembic", "upgrade", "head"]  
+          envFrom:
+            - configMapRef:
+                name: student-api-config
+            - secretRef:
+                name: student-api-secret
+      containers:
+        - name: student-api
+          image: at1asflame/student-api:c903951
+          imagePullPolicy: IfNotPresent   
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: student-api-config
+            - secretRef:
+                name: student-api-secret
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5

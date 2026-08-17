@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: student-api
+  namespace: student-api
+  labels:
+    app: student-api
+spec:
+  type: ClusterIP
+  selector:
+    app: student-api
+  ports:
+    - port: 80
+      targetPort: 8000
