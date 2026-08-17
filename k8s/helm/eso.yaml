@@ -1,0 +1,21 @@
+# values-eso.yaml
+# external-secrets Helm chart: https://github.com/external-secrets/external-secrets
+
+installCRDs: true
+
+webhook:
+  port: 9443
+
+certController:
+  create: true
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+nodeSelector:
+  workload: dependencies

@@ -1,0 +1,43 @@
+# values-vault.yaml
+# Vault Helm chart: https://github.com/hashicorp/vault-helm
+server:
+  dev:
+    enabled: false
+
+  standalone:
+    enabled: true
+    config: |
+      ui = true
+
+      listener "tcp" {
+        address     = "[::]:8200"
+        cluster_address = "[::]:8201"
+        tls_disable = 1                    # set 0 for TLS; add tls_cert_file / tls_key_file
+      }
+
+      storage "raft" {
+        path = "/vault/data"
+      }
+
+  # persistent volume backing the raft storage above
+  dataStorage:
+    enabled: true
+    size: 1Gi
+    storageClass: standard    # swap to csi-hostpath-sc if you moved postgres to it too
+
+  ha:
+    enabled: false   # single replica - fine for bootcamp/minikube, not for real prod
+
+  nodeSelector:
+    workload: dependencies
+
+  service:
+    enabled: true
+
+ui:
+  enabled: true
+  serviceType: ClusterIP
+
+# Not needed for ESO (ESO talks to Vault's API directly, not via sidecar injection)
+injector:
+  enabled: false
