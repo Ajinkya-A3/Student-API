@@ -1,0 +1,109 @@
+# kube-prometheus-stack-values.yaml
+# helm install kps prometheus-community/kube-prometheus-stack \
+#   -n observability --create-namespace -f kube-prometheus-stack-values.yaml
+
+fullnameOverride: kps
+
+# ---------------------------------------------------------------------------
+# node-exporter (node metrics — CPU, disk, mem per node)
+# ---------------------------------------------------------------------------
+nodeExporter:
+  enabled: true
+
+prometheus-node-exporter:
+  hostRootFsMount:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# kube-state-metrics (cluster object state — deployments, pods, restarts etc.)
+# ---------------------------------------------------------------------------
+kubeStateMetrics:
+  enabled: true
+
+kube-state-metrics:
+  metricLabelsAllowlist:
+    - pods=[app.kubernetes.io/name]
+
+# ---------------------------------------------------------------------------
+# Prometheus
+# ---------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    nodeSelector:
+      workload: dependencies
+
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    ruleNamespaceSelector: {}
+
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: csi-hostpath-sc-wait
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+
+  service:
+    type: ClusterIP
+
+# ---------------------------------------------------------------------------
+# Alertmanager — left on chart defaults for now, no custom routing/receivers.
+# You'll layer Slack config + PrometheusRules in separately later.
+# ---------------------------------------------------------------------------
+alertmanager:
+  alertmanagerSpec:
+    nodeSelector:
+      workload: dependencies
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+
+# ---------------------------------------------------------------------------
+# Grafana — Loki as the only extra datasource, dashboard sidecar
+# ---------------------------------------------------------------------------
+grafana:
+  nodeSelector:
+    workload: dependencies
+
+  adminPassword: admin
+
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      folder: /tmp/dashboards
+      searchNamespace: ALL
+    datasources:
+      enabled: true
+
+  # Prometheus datasource is auto-added by this chart itself.
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki-gateway.observability.svc.cluster.local
+      isDefault: false
+      jsonData:
+        maxLines: 1000
+
+  persistence:
+    enabled: true
+    storageClassName: csi-hostpath-sc-wait
+    size: 5Gi
+
+  service:
+    type: ClusterIP
