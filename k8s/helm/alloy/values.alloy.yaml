@@ -1,0 +1,111 @@
+# values.yaml
+controller:
+  type: daemonset
+
+alloy:
+  # Don't send Alloy's own telemetry/reporting anywhere.
+  enableReporting: false
+
+  # Alloy needs access to the node's Kubernetes log files.
+  mounts:
+    varlog: true
+
+  configMap:
+    create: true
+    content: |-
+      logging {
+        level  = "info"
+        format = "logfmt"
+      }
+
+      // ------------------------------------------------------------
+      // Loki destination
+      // ------------------------------------------------------------
+      loki.write "default" {
+        endpoint {
+          url = "http://loki-gateway.observability.svc.cluster.local/loki/api/v1/push"
+        }
+      }
+
+      // ------------------------------------------------------------
+      // Discover Kubernetes pods
+      // ------------------------------------------------------------
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // ------------------------------------------------------------
+      // Convert Kubernetes pod metadata into log targets
+      // ------------------------------------------------------------
+      discovery.relabel "pod_logs" {
+        targets = discovery.kubernetes.pods.targets
+
+        // Namespace
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        // Pod name
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        // Container name
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        // Node name
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          target_label  = "node"
+        }
+        // Application label
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+        }
+        // Build the path to the container log.
+        rule {
+          source_labels = [
+            "__meta_kubernetes_pod_uid",
+            "__meta_kubernetes_pod_container_name",
+          ]
+          separator    = "/"
+          regex        = "(.*)/(.*)"
+          target_label = "__path__"
+          replacement  = "/var/log/pods/*$1/$2/*.log"
+        }
+
+        // ----------------------------------------------------------
+        // ONLY collect the student-api application container
+        // ----------------------------------------------------------
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          regex         = "student-api"
+          action        = "keep"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          regex         = "student-api"
+          action        = "keep"
+        }
+      }
+
+      // ------------------------------------------------------------
+      // Read Kubernetes container logs
+      // ------------------------------------------------------------
+      loki.source.file "pod_logs" {
+        targets    = discovery.relabel.pod_logs.output
+        forward_to = [loki.process.application_logs.receiver]
+      }
+
+      // ------------------------------------------------------------
+      // Process application logs
+      // ------------------------------------------------------------
+      loki.process "application_logs" {
+        // Parse CRI/containerd log format.
+        stage.cri {}
+
+        forward_to = [loki.write.default.receiver]
+      }
