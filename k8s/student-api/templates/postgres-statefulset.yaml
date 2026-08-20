@@ -33,6 +33,26 @@ spec:
       # NEW: pod-level security context (was absent in the raw manifest)
       securityContext:
         {{- toYaml .Values.database.podSecurityContext | nindent 8 }}
+      {{- if .Values.database.fixPermissions.enabled }}
+      # NEW: initContainer to chown the PV/subPath directory before postgres
+      # starts. Needed because fsGroup does not reliably propagate ownership
+      # to a subPath directory created after pod start (k8s issue #57923),
+      # so the main container's chmod during initdb fails with EPERM even
+      # with fsGroup set correctly at the pod level.
+      initContainers:
+        - name: fix-permissions
+          image: "{{ .Values.database.fixPermissions.image.repository }}:{{ .Values.database.fixPermissions.image.tag }}"
+          command:
+            - sh
+            - -c
+            - "mkdir -p /var/lib/postgresql/data && chown -R {{ .Values.database.podSecurityContext.runAsUser }}:{{ .Values.database.podSecurityContext.runAsGroup }} /var/lib/postgresql/data"
+          securityContext:
+            {{- toYaml .Values.database.fixPermissions.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata
+      {{- end }}
       containers:
         - name: postgres
           image: "{{ .Values.database.image.repository }}:{{ .Values.database.image.tag }}"
