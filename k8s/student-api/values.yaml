@@ -153,6 +153,7 @@ database:
     readOnlyRootFilesystem: false
     capabilities:
       drop: ["ALL"]
+      add: ["FOWNER"]
 
   nodeAffinity:
     enabled: true
