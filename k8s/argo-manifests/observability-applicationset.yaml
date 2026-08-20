@@ -1,0 +1,67 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: observability
+  namespace: argocd
+
+spec:
+  generators:
+    - list:
+        elements:
+          - name: kube-prometheus-stack
+            path: k8s/helm/kube-prometheus-stack
+            namespace: observability
+            valuesFile: values.kps.yaml
+
+          - name: loki
+            path: k8s/helm/loki
+            namespace: observability
+            valuesFile: values.loki.yaml
+
+          - name: alloy
+            path: k8s/helm/alloy
+            namespace: observability
+            valuesFile: values.alloy.yaml
+
+          - name: blackbox-exporter
+            path: k8s/helm/prometheus-blackbox-exporter
+            namespace: observability
+            valuesFile: values.blackbox.yaml
+
+          - name: postgres-exporter
+            path: k8s/helm/prometheus-postgres-exporter
+            namespace: observability
+            valuesFile: values.postgres.yaml
+
+  template:
+    metadata:
+      name: '{{name}}'
+      labels:
+        app.kubernetes.io/part-of: observability
+        app.kubernetes.io/managed-by: argocd
+
+    spec:
+      project: default
+
+      source:
+        repoURL: https://github.com/Ajinkya-A3/Student-API.git
+        targetRevision: main
+        path: '{{path}}'
+
+        helm:
+          releaseName: '{{name}}'
+          valueFiles:
+            - '{{valuesFile}}'
+
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true

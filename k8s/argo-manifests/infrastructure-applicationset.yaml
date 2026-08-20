@@ -1,0 +1,52 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: infrastructure
+  namespace: argocd
+
+spec:
+  generators:
+    - list:
+        elements:
+          - name: vault
+            path: k8s/helm/vault
+            namespace: vault
+            valuesFile: values.vault.yaml
+
+          - name: external-secrets
+            path: k8s/helm/external-secrets
+            namespace: external-secrets
+            valuesFile: values.eso.yaml
+
+  template:
+    metadata:
+      name: '{{name}}'
+      labels:
+        app.kubernetes.io/part-of: infrastructure
+        app.kubernetes.io/managed-by: argocd
+
+    spec:
+      project: default
+
+      source:
+        repoURL: https://github.com/Ajinkya-A3/Student-API.git
+        targetRevision: main
+        path: '{{path}}'
+
+        helm:
+          releaseName: '{{name}}'
+          valueFiles:
+            - '{{valuesFile}}'
+
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
