@@ -65,7 +65,7 @@ alloy:
           source_labels = ["__meta_kubernetes_pod_label_app"]
           target_label  = "app"
         }
-        // Build the path to the container log.
+        // Build the glob path to the container log.
         rule {
           source_labels = [
             "__meta_kubernetes_pod_uid",
@@ -93,10 +93,20 @@ alloy:
       }
 
       // ------------------------------------------------------------
+      // Expand the glob pattern in __path__ into real, existing file
+      // paths on disk. loki.source.file does NOT do glob expansion
+      // itself — this is the step that resolves "*<uid>/student-api/*.log"
+      // into the actual file(s) that exist on this node.
+      // ------------------------------------------------------------
+      local.file_match "pod_logs" {
+        path_targets = discovery.relabel.pod_logs.output
+      }
+
+      // ------------------------------------------------------------
       // Read Kubernetes container logs
       // ------------------------------------------------------------
       loki.source.file "pod_logs" {
-        targets    = discovery.relabel.pod_logs.output
+        targets    = local.file_match.pod_logs.targets
         forward_to = [loki.process.application_logs.receiver]
       }
 
