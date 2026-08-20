@@ -1,0 +1,38 @@
+config:
+  modules:
+    http_2xx:
+      prober: http
+      timeout: 5s
+      http:
+        preferred_ip_protocol: ip4
+        valid_status_codes: [200, 301, 302]
+    tcp_connect:
+      prober: tcp
+      timeout: 5s
+    # Kept as a spare in case ArgoCD or Vault TLS gets re-enabled later.
+    http_2xx_tls_skip_verify:
+      prober: http
+      timeout: 5s
+      http:
+        preferred_ip_protocol: ip4
+        tls_config:
+          insecure_skip_verify: true
+
+serviceMonitor:
+  enabled: true
+  defaults:
+    interval: 30s
+    scrapeTimeout: 10s
+    module: http_2xx
+  targets:
+    - name: argocd-server
+      url: http://argocd-server.argocd.svc.cluster.local
+      module: http_2xx
+    - name: vault
+      url: http://vault.vault.svc.cluster.local:8200/v1/sys/health
+      module: http_2xx
+    - name: student-api
+      url: http://student-api.student-api.svc.cluster.local/api/v1/health
+      module: http_2xx
+  selfMonitor:
+    enabled: true
