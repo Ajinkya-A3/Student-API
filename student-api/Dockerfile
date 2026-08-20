@@ -1,6 +1,7 @@
 ############################
 # Builder
 ############################
+
 FROM python:3.14-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -24,15 +25,20 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 ############################
 # Runtime
 ############################
+
 FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
 
-
-
-RUN groupadd --gid 1001 appgroup && \
+# Update Debian packages to patched versions,
+# then create the non-root application user.
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --gid 1001 appgroup && \
     useradd \
         --uid 1001 \
         --gid appgroup \
