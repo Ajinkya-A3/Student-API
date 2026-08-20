@@ -17,7 +17,7 @@ application:
 
   image:
     repository: at1asflame/student-api
-    tag: "c903951"
+    tag: "1c15017"
     pullPolicy: IfNotPresent
 
   service:
