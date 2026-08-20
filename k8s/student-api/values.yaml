@@ -154,24 +154,6 @@ database:
     capabilities:
       drop: ["ALL"]
 
-  # NEW: initContainer that chowns the pgdata subPath directory to
-  # runAsUser:runAsGroup before postgres starts. This works around fsGroup
-  # not reliably propagating ownership to a subPath directory created after
-  # pod start (a known k8s limitation), which was causing initdb's chmod
-  # to fail with "Operation not permitted" even with FOWNER granted to the
-  # main container.
-  fixPermissions:
-    enabled: true
-    image:
-      repository: busybox
-      tag: "1.36"
-    securityContext:
-      runAsUser: 0
-      allowPrivilegeEscalation: false
-      capabilities:
-        drop: ["ALL"]
-        add: ["CHOWN", "FOWNER"]
-
   nodeAffinity:
     enabled: true
     key: workload
