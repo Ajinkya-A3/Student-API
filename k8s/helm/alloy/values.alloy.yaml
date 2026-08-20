@@ -9,6 +9,7 @@ alloy:
   # Alloy needs access to the node's Kubernetes log files.
   mounts:
     varlog: true
+    dockercontainers: true
 
   configMap:
     create: true
