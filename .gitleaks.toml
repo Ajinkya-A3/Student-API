@@ -1,0 +1,5 @@
+[allowlist]
+  paths = [
+    '''k8s/argo-cd/.*''',
+    '''k8s/helm/.*'''
+  ]
