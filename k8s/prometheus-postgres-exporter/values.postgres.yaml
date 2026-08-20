@@ -1,0 +1,20 @@
+# postgres-exporter-values.yaml
+# helm install postgres-exporter prometheus-community/prometheus-postgres-exporter \
+#   -n observability -f postgres-exporter-values.yaml
+
+nodeSelector:
+  workload: dependencies
+
+config:
+  datasource:
+    host: postgres.student-api.svc.cluster.local
+    user: postgres
+    password: postgres
+    port: "5432"
+    database: student_db
+    sslmode: disable
+
+serviceMonitor:
+  enabled: true
+  namespace: observability
+  interval: 30s
