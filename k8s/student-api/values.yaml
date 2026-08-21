@@ -24,6 +24,14 @@ application:
     type: ClusterIP
     port: 80
     targetPort: 8000
+    portName: http     # NEW: named port, required so ServiceMonitor can reference it
+
+  # NEW: Prometheus scraping — requires the named port above and a live
+  # /metrics endpoint (prometheus-fastapi-instrumentator) on the app.
+  serviceMonitor:
+    enabled: true
+    path: /metrics
+    interval: 15s
 
   envFrom:
     configMapName: student-api-config

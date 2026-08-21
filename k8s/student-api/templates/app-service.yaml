@@ -10,5 +10,6 @@ spec:
   selector:
     app: {{ .Values.application.name }}
   ports:
-    - port: {{ .Values.application.service.port }}
+    - name: {{ .Values.application.service.portName | default "http" }}
+      port: {{ .Values.application.service.port }}
       targetPort: {{ .Values.application.service.targetPort }}
