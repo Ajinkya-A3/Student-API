@@ -60,8 +60,7 @@ prometheus:
     type: ClusterIP
 
 # ---------------------------------------------------------------------------
-# Alertmanager — left on chart defaults for now, no custom routing/receivers.
-# You'll layer Slack config + PrometheusRules in separately later.
+# Alertmanager — Slack routing configured directly, webhook as plain value.
 # ---------------------------------------------------------------------------
 alertmanager:
   alertmanagerSpec:
@@ -71,6 +70,106 @@ alertmanager:
       requests:
         cpu: 50m
         memory: 64Mi
+
+  config:
+    global:
+      resolve_timeout: 5m
+
+    route:
+      receiver: slack-default
+      group_by: ['alertname', 'severity']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+
+    receivers:
+      - name: slack-default
+        slack_configs:
+          - api_url: 'https://hooks.slack.com/services/XXX/YYY/ZZZ'
+            channel: '#alerts'
+            send_resolved: true
+            title: '{{ .CommonLabels.alertname }} ({{ .CommonLabels.severity }})'
+            text: '{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}'
+
+# ---------------------------------------------------------------------------
+# PrometheusRule groups — CPU/disk, error rate, latency (p90/p95/p99),
+# request volume, and critical service restarts.
+# ---------------------------------------------------------------------------
+additionalPrometheusRulesMap:
+  student-api-alerts:
+    groups:
+      - name: node-resources
+        rules:
+          - alert: HighCPUUsage
+            expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "CPU usage above 80% on {{ $labels.instance }}"
+
+          - alert: HighDiskUsage
+            expr: |
+              (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+               / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}) * 100 < 15
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Disk space below 15% on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+
+      - name: app-http
+        rules:
+          - alert: HighErrorRate
+            expr: |
+              sum(rate(http_requests_total{status=~"5.."}[10m]))
+              / sum(rate(http_requests_total[10m])) > 0.05
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "5xx error rate above 5% over the last 10m"
+
+          - alert: HighLatencyP90
+            expr: histogram_quantile(0.90, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 0.5
+            for: 5m
+            labels:
+              severity: info
+            annotations:
+              summary: "p90 request latency above 500ms"
+
+          - alert: HighLatencyP95
+            expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 0.8
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "p95 request latency above 800ms"
+
+          - alert: HighLatencyP99
+            expr: histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 1
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "p99 request latency above 1s"
+
+          - alert: RequestVolumeSpike
+            expr: sum(rate(http_requests_total[5m])) > 100
+            for: 2m
+            labels:
+              severity: info
+            annotations:
+              summary: "Request rate spiked above 100 req/s"
+
+      - name: critical-pod-restarts
+        rules:
+          - alert: CriticalServiceRestarted
+            expr: increase(kube_pod_container_status_restarts_total{pod=~"postgres.*|vault.*|argocd.*"}[10m]) > 0
+            labels:
+              severity: critical
+            annotations:
+              summary: "{{ $labels.pod }} in {{ $labels.namespace }} restarted"
 
 # ---------------------------------------------------------------------------
 # Grafana — Loki as the only extra datasource, dashboard sidecar
@@ -87,13 +186,15 @@ grafana:
       label: grafana_dashboard
       folder: /tmp/dashboards
       searchNamespace: ALL
+      folderAnnotation: grafana_folder
     datasources:
       enabled: true
 
-  # Prometheus datasource is auto-added by this chart itself.
+  # Prometheus datasource is auto-added by this chart itself, uid: prometheus
   additionalDataSources:
     - name: Loki
       type: loki
+      uid: loki
       access: proxy
       url: http://loki-gateway.observability.svc.cluster.local
       isDefault: false
