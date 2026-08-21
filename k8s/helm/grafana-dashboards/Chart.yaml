@@ -1,0 +1,4 @@
+apiVersion: v2
+name: grafana-dashboards
+description: Dashboards for the observability stack, auto-loaded by Grafana's sidecar
+version: 0.1.0
