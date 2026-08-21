@@ -33,6 +33,11 @@ spec:
             namespace: observability
             valuesFile: values.postgres.yaml
 
+          - name: grafana-dashboards
+            path: k8s/helm/grafana-dashboards
+            namespace: observability
+            valuesFile: values.yaml
+
   template:
     metadata:
       name: '{{name}}'
