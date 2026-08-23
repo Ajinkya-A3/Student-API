@@ -40,6 +40,12 @@ prometheus:
     ruleSelectorNilUsesHelmValues: false
     ruleNamespaceSelector: {}
 
+    # Required so Probe CRDs (blackbox exporter uptime checks) are picked up
+    # the same way rules/ServiceMonitors already are above.
+    probeSelectorNilUsesHelmValues: false
+    probeSelector: {}
+    probeNamespaceSelector: {}
+
     storageSpec:
       volumeClaimTemplate:
         spec:
@@ -60,7 +66,16 @@ prometheus:
     type: ClusterIP
 
 # ---------------------------------------------------------------------------
-# Alertmanager — Slack routing configured directly, webhook as a k8s secret.
+# Alertmanager — Slack routing configured directly, webhook read from a
+# Kubernetes Secret (alertmanager-slack-webhook, key: webhook-url).
+#
+# IMPORTANT: kube-prometheus-stack's default alertmanager.config ships a
+# "null" receiver used to silence its own built-in Watchdog/InfoInhibitor
+# alerts. Helm deep-merges the `route` map (so that default child route
+# survives) but fully REPLACES the `receivers` list once you set your own —
+# which drops the "null" receiver and breaks reconciliation with
+# `undefined receiver "null" used in route`. The "null" receiver below is
+# required for that reason — do not remove it.
 # ---------------------------------------------------------------------------
 alertmanager:
   alertmanagerSpec:
@@ -85,6 +100,8 @@ alertmanager:
       repeat_interval: 4h
 
     receivers:
+      - name: "null"
+
       - name: slack-default
         slack_configs:
           - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/webhook-url
