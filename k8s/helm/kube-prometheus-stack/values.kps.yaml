@@ -206,6 +206,8 @@ grafana:
       folder: /tmp/dashboards
       searchNamespace: ALL
       folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
     datasources:
       enabled: true
 
