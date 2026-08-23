@@ -1,11 +1,20 @@
 # Student API
 
-A Student CRUD REST API built with **FastAPI**, **SQLAlchemy 2.0**, **Alembic**, and **PostgreSQL**, targeting **Python 3.14**. It was built as a Twelve-Factor-App-style learning exercise: versioned REST endpoints, config via environment variables, DB migrations, structured logging, and unit tests.
+A Student CRUD REST API built with **FastAPI**, **SQLAlchemy 2.0**, **Alembic**, and **PostgreSQL**, targeting **Python 3.14**. It started as a Twelve-Factor-App-style learning exercise  versioned REST endpoints, config via environment variables, DB migrations, structured logging, unit tests  and has since grown into a full deployment story for the same app across four environments:
+
+| Environment | How | Where |
+|---|---|---|
+| Local (bare process) | `make dev` + local Postgres | your machine |
+| Local (containers) | `docker compose up` | your machine / any Docker host |
+| Kubernetes | Helm charts, deployed GitOps-style via ArgoCD | `k8s/` |
+| "Production-like" bare metal | Vagrant + libvirt/KVM on an EC2 host, Nginx load-balancing two API replicas | `vagrant/` |
+
+This README covers the API itself end-to-end, then gives an overview of the CI/CD pipeline and each deployment path. The Kubernetes and Vagrant setups are deep enough that they get their own, more detailed READMEs linked from the relevant sections below.
 
 ## Table of Contents
 
+- [Repository layout](#repository-layout)
 - [Why UUIDv7 for the primary key](#why-uuidv7-for-the-primary-key)
-- [Project structure](#project-structure)
 - [Prerequisites](#prerequisites)
 - [Local setup](#local-setup)
 - [The Makefile, explained](#the-makefile-explained)
@@ -15,51 +24,72 @@ A Student CRUD REST API built with **FastAPI**, **SQLAlchemy 2.0**, **Alembic**,
 - [Postman collection](#postman-collection)
 - [Running the tests](#running-the-tests)
 - [Logging](#logging)
+- [CI/CD pipeline](#cicd-pipeline)
 - [Docker image](#docker-image)
 - [Docker Compose (Postgres + app)](#docker-compose-postgres--app)
+- [Kubernetes deployment (Helm + ArgoCD GitOps)](#kubernetes-deployment-helm--argocd-gitops)
+- [Bare-metal deployment (Vagrant on EC2)](#bare-metal-deployment-vagrant-on-ec2)
+
+## Repository layout
+
+```
+Student-API/
+├── docker-compose.yaml          # Local Postgres 17 (+ optional app container) for development
+├── README.md                    # You are here
+├── .github/workflows/ci.yaml    # Gitleaks -> Semgrep -> build/test/lint -> Docker build/scan/push -> GitOps bump
+│
+├── student-api/                 # The FastAPI application itself
+│   ├── Dockerfile                # Multi-stage, non-root production image
+│   ├── .dockerignore
+│   ├── Makefile                  # build / run / migrate / test shortcuts
+│   ├── requirements.in           # unpinned source dependency list
+│   ├── requirements.txt          # pinned dependencies (installed by make install)
+│   ├── alembic.ini
+│   ├── pytest.ini
+│   ├── .env.example              # template for local .env
+│   ├── alembic/
+│   │   ├── env.py                 # wires Alembic to app.config.settings + app.db.Base
+│   │   └── versions/               # migration scripts
+│   ├── app/
+│   │   ├── main.py                 # FastAPI app, lifespan, router registration
+│   │   ├── config.py                # Settings (env-var driven, pydantic-settings)
+│   │   ├── db.py                     # engine, SessionLocal, Base, get_db dependency
+│   │   ├── logger.py                  # structlog JSON logging setup
+│   │   ├── exceptions.py               # global exception handlers
+│   │   ├── models/student.py            # SQLAlchemy ORM model (uuid7 PK)
+│   │   ├── schemas/student.py            # Pydantic request/response schemas
+│   │   └── api/v1/
+│   │       ├── health.py                  # /api/v1/health, /api/v1/ready
+│   │       └── students.py                 # /api/v1/students CRUD routes
+│   ├── tests/
+│   │   ├── conftest.py                      # SQLite-backed TestClient fixtures
+│   │   ├── test_health.py
+│   │   └── test_students.py
+│   └── Student-API.postman_collection.json
+│
+├── k8s/                          # Kubernetes / GitOps — see "Kubernetes deployment" below
+│   ├── manifests/                 # Original raw K8s YAML (pre-Helm) — kept for reference
+│   ├── student-api/                # Helm chart for this app, converted from manifests/ (has its own README)
+│   ├── argo-cd/                     # Vendored upstream ArgoCD Helm chart, used to bootstrap ArgoCD itself
+│   ├── argo-manifests/               # ArgoCD Application / ApplicationSet definitions (the actual GitOps wiring)
+│   ├── helm/                          # Vendored third-party Helm charts (Vault, ESO, kube-prometheus-stack, Loki,
+│   │                                     Alloy, blackbox-exporter, postgres-exporter, grafana-dashboards) — pulled
+│   │                                     in as-is, not authored here; each has its own upstream README
+│   └── script.sh                        # One-shot bootstrap: Docker, kubectl, Helm, 3-node minikube, CSI storage, node labels
+│
+└── vagrant/                      # Bare-metal-style deployment on an EC2 host via Vagrant + libvirt/KVM
+    ├── README.md                  # Full setup guide (its own doc, see link below)
+    ├── Vagrantfile
+    ├── docker-compose.yaml         # 2x API + Postgres + Nginx load balancer
+    ├── nginx/nginx.conf
+    └── scripts/bootstrap.sh
+```
 
 ## Why UUIDv7 for the primary key
 
 The `students.id` column is a `UUID`, generated with Python 3.14's native `uuid.uuid7()` (see `app/models/student.py`), instead of the more common `uuid4()`.
 
 The reason is **index locality**. A `uuid4` is fully random, so every insert lands at a random point in the primary key's B-tree index — that causes constant page splits, poor buffer-cache hit rates, and index fragmentation as the table grows. `uuid7` embeds a **48-bit millisecond Unix timestamp** in the leading bits of the value, so IDs generated close together in time sort close together lexicographically. That makes inserts append-mostly (like an auto-increment integer), which keeps the primary key index compact and cache-friendly, while still giving every row a globally unique, non-guessable, non-sequential-looking identifier (unlike a plain auto-increment ID, it doesn't leak row counts or let you enumerate other students by incrementing a number). This is why `uuid7` was standardized in RFC 9562 and added to Python's stdlib `uuid` module in 3.14 — you get the operational benefits of a sequential key with the safety properties of a random one.
-
-## Project structure
-
-```
-Test-main/
-├── docker-compose.yaml          # Local Postgres 17 for development
-├── README.md                    # You are here
-└── student-api/
-    ├── Dockerfile                # Multi-stage, non-root production image
-    ├── .dockerignore             # Keeps build context/image lean
-    ├── Makefile                 # build / run / migrate / test shortcuts
-    ├── requirements.in          # unpinned source dependency list
-    ├── requirements.txt         # pinned dependencies (installed by make install)
-    ├── alembic.ini               # Alembic configuration
-    ├── pytest.ini                 # pytest configuration
-    ├── .env.example               # template for local .env
-    ├── alembic/
-    │   ├── env.py                 # wires Alembic to app.config.settings + app.db.Base
-    │   └── versions/               # migration scripts
-    ├── app/
-    │   ├── main.py                 # FastAPI app, lifespan, router registration
-    │   ├── config.py                # Settings (env-var driven, pydantic-settings)
-    │   ├── db.py                     # engine, SessionLocal, Base, get_db dependency
-    │   ├── logger.py                  # structlog JSON logging setup
-    │   ├── exceptions.py               # global exception handlers
-    │   ├── models/student.py            # SQLAlchemy ORM model (uuid7 PK)
-    │   ├── schemas/student.py            # Pydantic request/response schemas
-    │   └── api/v1/
-    │       ├── health.py                  # /api/v1/health, /api/v1/ready
-    │       └── students.py                 # /api/v1/students CRUD routes
-    ├── tests/
-    │   ├── conftest.py                      # SQLite-backed TestClient fixtures
-    │   ├── test_health.py
-    │   └── test_students.py
-    └── postman/
-        └── Student-API.postman_collection.json
-```
 
 ## Prerequisites
 
@@ -201,12 +231,12 @@ Standard, semantically-correct HTTP verbs are used throughout: `POST` for creati
 
 ## Postman collection
 
-Import `student-api/postman/Student-API.postman_collection.json` into Postman. It includes:
+Import `student-api/Student-API.postman_collection.json` into Postman. It includes:
 
 - **Health** — Liveness and Readiness probes.
 - **Students** — Create, Get All, Get By ID, Update, Delete, plus a Get-By-ID-Not-Found example.
 
-It uses a `base_url` collection variable (defaults to `http://localhost:8000`) and a `student_id` variable that's **auto-populated** by a test script on the "Create Student" request — so you can run Create, then immediately run Get/Update/Delete without manually copying the ID. Change `base_url` if you're running the API somewhere other than `localhost:8000`.
+It uses a `base_url` collection variable (defaults to `http://localhost:8000`) and a `student_id` variable that's **auto-populated** by a test script on the "Create Student" request — so you can run Create, then immediately run Get/Update/Delete without manually copying the ID. Change `base_url` if you're running the API somewhere other than `localhost:8000` (e.g. against the Kubernetes ingress, or the Vagrant box's `<EC2-IP>:8080`).
 
 ## Running the tests
 
@@ -222,6 +252,20 @@ Tests don't touch your dev/prod Postgres database at all. `tests/conftest.py` se
 ## Logging
 
 `app/logger.py` configures `structlog` to emit structured JSON logs: `DEBUG`/`INFO`/`WARNING` go to `stdout`, `ERROR`/`CRITICAL` go to `stderr`, with the minimum level controlled by `LOG_LEVEL`. Every request-handling code path (student created, not found, duplicate email, DB errors, unhandled exceptions, etc.) logs a structured event, and `app/exceptions.py` adds global handlers so even framework-level validation failures and unhandled exceptions produce a proper structured log line and a clean JSON error response instead of an unstructured stack trace.
+
+## CI/CD pipeline
+
+`.github/workflows/ci.yaml` runs on every push/PR touching `student-api/**` (and on manual `workflow_dispatch`), as a chain of jobs:
+
+| Job | What it does |
+|---|---|
+| **Gitleaks** | Scans the full git history for committed secrets. Runs first and everything else depends on it — fail fast before spending CI minutes on a build that shouldn't ship anyway. |
+| **Semgrep** | Static code security scan (OSS rules), uploads a JSON/Markdown report as a build artifact. Skipped for Dependabot PRs. |
+| **Build, Test & Lint** | Sets up Python 3.14, runs `make install`, `make test`, `make lint` — the same Makefile targets you'd run locally. |
+| **Docker Build, Scan & Push** | Builds the multi-stage image (via Buildx/QEMU), scans it with **Trivy** and uploads the report, then pushes to Docker Hub. |
+| **Bump image tag in Helm values** | Patches `application.image.tag` in `k8s/student-api/values.yaml` to the new commit SHA and pushes that commit back to `main`. |
+
+That last job is the GitOps handoff: it's the only place CI touches Kubernetes config at all — it never runs `kubectl`/`helm` itself. ArgoCD (see below) is watching the same repo and picks up the values-file change on its own, so a merge to `main` flows all the way to a running pod without CI needing cluster credentials.
 
 ## Docker image
 
@@ -378,4 +422,54 @@ healthcheck:
 ```
 The runtime image is `slim` with no `curl`/`wget` installed (deliberately, to keep it lean), so this shells out to the Python already on `PATH` inside the container and hits the app's own `/api/v1/health` liveness endpoint via stdlib `urllib` — no extra OS package needed just for a healthcheck. `start_period: 10s` gives the app a grace window to boot before failed checks start counting toward `retries`.
 
-Note this compose file bakes real (if trivial, `postgres`/`postgres`) credentials directly into version control — fine for local dev/learning, but not how this would be done for a real deployment. That's exactly the gap Vault + External Secrets Operator fills in production: secrets injected into the running Pod at deploy time, never committed to a compose file or manifest.
+Note this compose file bakes real (if trivial, `postgres`/`postgres`) credentials directly into version control — fine for local dev/learning, but not how this would be done for a real deployment. That's exactly the gap Vault + External Secrets Operator fills in production, and is exactly what the Kubernetes deployment below does instead.
+
+## Kubernetes deployment (Helm + ArgoCD GitOps)
+
+Everything Kubernetes-related lives under `k8s/`. The short version: the app and its infrastructure are packaged as Helm charts, and ArgoCD — pointed at this same repo — continuously reconciles the cluster to match whatever's committed to `main`. Nobody runs `helm install` by hand against the app after the initial bootstrap; CI bumps an image tag in git, and ArgoCD does the rest.
+
+```
+k8s/
+├── manifests/             # Raw K8s YAML this app started from, before it was converted to a Helm chart
+├── student-api/           # The Helm chart for this app — see k8s/student-api/README.md
+├── argo-cd/               # Vendored upstream ArgoCD chart, used only to install ArgoCD itself
+├── argo-manifests/        # ArgoCD Application / ApplicationSet objects — the actual GitOps declarations
+├── helm/                  # Vendored third-party charts (Vault, ESO, observability stack)
+└── script.sh              # Bootstraps a 3-node minikube cluster from a bare host
+```
+
+- **`k8s/manifests/`** — the original hand-written manifests (`namespace`, `configmap`, `secret`, app `Deployment`/`Service`, Postgres `StatefulSet`/`Service`, the `StorageClass`, ESO components) that predate the Helm chart. Kept for reference/diffing; not what's actually deployed anymore.
+
+- **`k8s/student-api/`** — the Helm chart the app is actually deployed with, converted 1:1 from `manifests/`. Adds an optional `HorizontalPodAutoscaler`, a toggle to source `DB_PASSWORD` from Vault via External Secrets Operator instead of a plain `Secret`, and a `ServiceMonitor` for Prometheus scraping. See **[`k8s/student-api/README.md`](k8s/student-api/README.md)** for install instructions and the full values reference.
+
+- **`k8s/argo-cd/`** — the vendored, upstream ArgoCD Helm chart (with `values.argo.yaml` for this cluster's overrides). This is what you `helm install` once to stand up ArgoCD itself on a fresh cluster; it isn't something ArgoCD manages about itself. See **[`k8s/argo-cd/README.md`](k8s/argo-cd/README.md)**.
+
+- **`k8s/argo-manifests/`** — the actual GitOps wiring, applied once ArgoCD is running:
+  - `student-api-application.yaml` — an ArgoCD `Application` pointing at `k8s/student-api`, deployed to the `student-api` namespace with automated `prune`/`selfHeal` sync.
+  - `infrastructure-applicationset.yaml` — an `ApplicationSet` (list generator) that deploys **Vault** and **External Secrets Operator** from `k8s/helm/vault` and `k8s/helm/external-secrets`.
+  - `observability-applicationset.yaml` — an `ApplicationSet` that deploys the full **PLG** observability stack (**k**ube-prometheus-stack, **L**oki, **A**lloy) plus `blackbox-exporter`, `postgres-exporter`, and a `grafana-dashboards` chart, all into the `observability` namespace, from `k8s/helm/*`.
+
+  All three use `syncOptions: [CreateNamespace=true, ServerSideApply=true]` and `automated: {prune: true, selfHeal: true}` — apply these to your ArgoCD instance once, and every subsequent change is just a git commit.
+
+- **`k8s/helm/`** — vendored copies of upstream Helm charts (HashiCorp Vault, External Secrets Operator, kube-prometheus-stack, Loki, Grafana Alloy, prometheus-blackbox-exporter, prometheus-postgres-exporter) plus a small locally-authored `grafana-dashboards` chart, each paired with an environment-specific `values.*.yaml` referenced by the ApplicationSets above. These are third-party charts pulled in as-is (not written for this project) — each one ships its own upstream `README.md`, so refer to those directly for chart-specific docs rather than this repo's docs.
+
+- **`k8s/script.sh`** — a single bootstrap script for a fresh Linux host: installs Docker + Compose plugin, `kubectl`, and Helm, starts a 3-node minikube cluster (`docker` driver), enables the `csi-hostpath-driver` addon, creates a `WaitForFirstConsumer` `StorageClass`, and labels the three nodes `workload=application` / `workload=database` / `workload=dependencies` so pods can be pinned by role via `nodeSelector`.
+
+For the full Vault + External Secrets Operator walkthrough (architecture, install, unseal, KV engine, Kubernetes auth, policies, and a troubleshooting log of real issues hit setting it up) see **[`k8s/helm/README.md`](k8s/helm/README.md)**.
+
+## Bare-metal deployment (Vagrant on EC2)
+
+`vagrant/` treats a Vagrant box — running on an EC2 instance via **libvirt/KVM** (not VirtualBox, since VirtualBox can't reliably get nested VT-x/AMD-V passthrough) — as a stand-in for a bare-metal production box: two API replicas, one Postgres instance, and an Nginx load balancer, all via plain `docker-compose.yaml`, no Kubernetes involved.
+
+```
+vagrant/
+├── README.md            # Full setup guide — EC2 nested virt, Vagrant/libvirt install, troubleshooting log
+├── Vagrantfile
+├── docker-compose.yaml   # student-postgres, student-api-1, student-api-2, student-nginx
+├── nginx/nginx.conf       # Round-robin upstream across the two API containers
+└── scripts/bootstrap.sh
+```
+
+Nginx load-balances round-robin across `app1:8000`/`app2:8000` (Docker-internal only — the only port actually published out of the box is `8080`, forwarded through to the EC2 host and mapped to Nginx's `80`). Migrations run once automatically after `app1`'s healthcheck passes.
+
+This is a fairly involved, EC2-specific setup (enabling nested virtualization via the AWS CLI, installing `libvirt`/`vagrant-libvirt`, Security Group rules, etc.), so the full step-by-step — including a troubleshooting log of real issues hit along the way — lives in **[`vagrant/README.md`](vagrant/README.md)** rather than being duplicated here.
