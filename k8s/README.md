@@ -60,6 +60,19 @@ combined with Helm templating — a common, well-established variant (used
 in ArgoCD's own bootstrapping guide and widely written up elsewhere), not a
 bespoke workaround.
 
+**Scope: `infrastructure` and `observability` only — not `student-api`.**
+`student-api`'s `ExternalSecret` needs `external-secrets` (and Vault behind
+it) already up and serving before it can resolve `DB_PASSWORD` — so it still
+has a real ordering dependency on this chart. But `student-api` is already
+deployed as its own standalone `Application`
+(`argo-manifests/student-api-application.yaml`), not an ApplicationSet — so
+there's nothing broken there to fix by folding it into this chart too. The
+simpler move is to leave `student-api-application.yaml` exactly as it is,
+and apply/sync it *after* this chart reports healthy (specifically, after
+the `external-secrets` wave). That gets the same effective ordering with a
+smaller diff: this chart only needs to absorb the two ApplicationSets that
+actually have the internal ordering problem.
+
 ### Why it solves the problem
 
 All the generated `Application` objects become **resources inside one
@@ -133,13 +146,6 @@ applications:
     namespace: observability
     valuesFile: values.yaml
     wave: 3
-
-  # --- application ---
-  - name: student-api
-    path: k8s/student-api
-    namespace: student-api
-    valuesFile: values.yaml
-    wave: 4
 ```
 
 `templates/application.yaml` — one template rendered once per entry:
@@ -179,17 +185,26 @@ spec:
 
 One root `Application` (created once, by hand or via `argocd app create`)
 points at `k8s/argocd-apps`, syncs it, and ArgoCD takes it from there —
-every future addition is a new entry in `values.yaml`, same ergonomics as
-the ApplicationSet list generator has today.
+every future infra/observability addition is a new entry in `values.yaml`,
+same ergonomics as the ApplicationSet list generator has today.
+
+`student-api-application.yaml` stays exactly as it is today, untouched, and
+gets applied as a separate step once this chart's root Application is
+`Healthy` (as it need the external secret to be present also the CRDs for the Servicemonitor). That's a manual sequencing step,
+same caveat as Option B below: ArgoCD doesn't enforce it, it just needs to
+be the documented deploy order.
 
 ### Tradeoffs of this fix, honestly
 
 **Gains:**
-- Deterministic, health-gated ordering: `infrastructure` → `observability` → `student-api`.
-- `selfHeal`/`automated` stays on for every component — no regression there.
+- Deterministic, health-gated ordering within the chart: `infrastructure` → `observability`.
+- `selfHeal`/`automated` stays on for every component in the chart — no regression there.
 - Bootstrap failure mode becomes legible: `kubectl get applications -n argocd`
   shows exactly which wave is stuck and why, instead of a pile of Applications
   independently retrying against missing dependencies.
+- `student-api`'s dependency on `external-secrets` is satisfiable by a single
+  documented manual step (apply it after this chart is healthy) instead of
+  relying on `selfHeal` retries to eventually converge.
 
 **Costs:**
 - One more indirection layer (a chart whose only job is to emit `Application`
