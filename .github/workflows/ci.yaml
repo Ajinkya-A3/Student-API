@@ -203,11 +203,6 @@ jobs:
 
   # =========================================================
   # 5️⃣ UPDATE GITOPS VALUES FILE (ArgoCD source of truth)
-  #    Uses Go-based yq (mikefarah/yq) — a native YAML processor,
-  #    NOT the Python/jq-wrapper yq. Go-yq edits the YAML AST
-  #    directly, so comments, blank lines, and key order in
-  #    values.yaml are preserved instead of being destroyed by
-  #    a YAML→JSON→YAML round-trip.
   # =========================================================
   update-manifest:
     name: Bump image tag in Helm values
@@ -225,49 +220,16 @@ jobs:
       - name: Extract Commit SHA
         run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
 
-      # Pin a specific version rather than "latest" so the pipeline
-      # doesn't silently break on an upstream yq release.
-      - name: Install Go-based yq
-        run: |
-          YQ_VERSION="v4.44.3"
-          sudo wget -qO /usr/local/bin/yq \
-            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
-          sudo chmod +x /usr/local/bin/yq
-          yq --version
-
       - name: Patch application.image.tag only
-        env:
-          SHORT_SHA: ${{ env.SHORT_SHA }}
         run: |
           FILE=k8s/student-api/values.yaml
 
-          # Path-based edit — targets .application.image.tag directly,
-          # no line-range regex like the old sed version needed.
-          yq -i '.application.image.tag = strenv(SHORT_SHA)' "$FILE"
+          sed -i '/^application:/,/^config:/{
+            s/^\(\s*tag: \)".*"/\1"'"${SHORT_SHA}"'"/
+          }' "$FILE"
 
           echo "Updated tag line:"
-          yq '.application.image.tag' "$FILE"
-
-      # Safety net: a clean tag bump should touch ~1 line (1 added,
-      # 1 removed). If yq ever reflows comments/whitespace unexpectedly,
-      # this fails the job instead of silently merging a noisy diff.
-      - name: Verify only the tag line changed
-        run: |
-          FILE=k8s/student-api/values.yaml
-          CHANGED_LINES=$(git diff --numstat "$FILE" | awk '{print $1+$2}')
-
-          if [ -z "$CHANGED_LINES" ] || [ "$CHANGED_LINES" -eq 0 ]; then
-            echo "::error::No changes detected in $FILE — patch may have failed silently."
-            exit 1
-          fi
-
-          if [ "$CHANGED_LINES" -gt 2 ]; then
-            echo "::error::Expected a ~2 line diff, got $CHANGED_LINES lines. Refusing to commit — check for comment/formatting loss."
-            git diff "$FILE"
-            exit 1
-          fi
-
-          echo "Diff size OK ($CHANGED_LINES lines changed)."
+          grep -A0 '^\s*tag: "'"${SHORT_SHA}"'"' "$FILE"
 
       - name: Commit and push
         run: |
