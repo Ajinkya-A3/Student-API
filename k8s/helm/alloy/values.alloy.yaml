@@ -118,5 +118,18 @@ alloy:
         // Parse CRI/containerd log format.
         stage.cri {}
 
+        // Drop successful kubelet probe hits (/api/v1/health) , (api/v1/ready) and
+        // Prometheus scrape hits (/metrics) — both are periodic,
+        // always-200 infra traffic already covered elsewhere:
+        //   - /api/v1/health uptime is tracked by the blackbox Probe CR
+        //   - /metrics scrape success is tracked by `up{job="student-api"}`
+        // Only 200s are dropped, so a failing probe or scrape (5xx/timeout)
+        // still shows up in logs — that's the one case you actually want to see.
+        stage.drop {
+          source              = ""
+          expression          = "(?i).*(api/v1/health|api/v1/ready|/metrics).*\"\\s+200\\s+OK.*"
+          drop_counter_reason = "noise_health_metrics_200"
+        }
+
         forward_to = [loki.write.default.receiver]
       }
