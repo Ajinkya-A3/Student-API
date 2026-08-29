@@ -67,7 +67,8 @@ application:
       - application
 
   probes:
-    path: /api/v1/health
+    health: /api/v1/health
+    ready: /api/v1/ready
     initialDelaySeconds: 15
     periodSeconds: 10
     timeoutSeconds: 5

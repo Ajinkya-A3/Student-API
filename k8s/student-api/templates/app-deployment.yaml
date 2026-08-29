@@ -68,7 +68,7 @@ spec:
                 name: {{ .Values.application.envFrom.secretName }}
           readinessProbe:
             httpGet:
-              path: {{ .Values.application.probes.path }}
+              path: {{ .Values.application.probes.ready }}
               port: {{ .Values.application.service.targetPort }}
             initialDelaySeconds: {{ .Values.application.probes.initialDelaySeconds }}
             periodSeconds: {{ .Values.application.probes.periodSeconds }}
@@ -76,7 +76,7 @@ spec:
             failureThreshold: {{ .Values.application.probes.failureThreshold }}
           livenessProbe:
             httpGet:
-              path: {{ .Values.application.probes.path }}
+              path: {{ .Values.application.probes.health }}
               port: {{ .Values.application.service.targetPort }}
             initialDelaySeconds: {{ .Values.application.probes.initialDelaySeconds }}
             periodSeconds: {{ .Values.application.probes.periodSeconds }}
