@@ -35,7 +35,7 @@ spec:
       # Migrations must complete before the app container starts.
       initContainers:
         - name: db-migrate
-          image: "at1asflame/student-api:c903951"
+          image: "at1asflame/student-api:1c15017"
           imagePullPolicy: IfNotPresent
           command: ["python","-m","alembic","upgrade","head"]
           envFrom:
@@ -56,7 +56,7 @@ spec:
               mountPath: /tmp
       containers:
         - name: student-api
-          image: "at1asflame/student-api:c903951"
+          image: "at1asflame/student-api:1c15017"
           imagePullPolicy: IfNotPresent
           # NEW: container-level security context (was absent in the raw manifest)
           securityContext:
@@ -75,7 +75,7 @@ spec:
                 name: student-api-secret
           readinessProbe:
             httpGet:
-              path: /api/v1/health
+              path: /api/v1/ready
               port: 8000
             initialDelaySeconds: 15
             periodSeconds: 10

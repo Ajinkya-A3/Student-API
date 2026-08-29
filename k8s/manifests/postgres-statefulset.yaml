@@ -63,10 +63,17 @@ spec:
                 secretKeyRef:
                   name: student-api-secret
                   key: DB_PASSWORD
+            # NEW: PGDATA points to a subdirectory inside the mounted volume
+            # root instead of using volumeMounts.subPath. subPath directories
+            # aren't reliably fsGroup-owned by kubelet on creation
+            # (k8s issue #57923), which caused initdb's chmod to fail with
+            # "Operation not permitted". Postgres now creates pgdata itself
+            # inside the correctly fsGroup-owned mount root, so it owns it.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           volumeMounts:
             - name: postgres-storage
               mountPath: /var/lib/postgresql/data
-              subPath: pgdata   # avoids "lost+found" issues on fresh hostpath PVs
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "postgres", "-d", "student_db"]

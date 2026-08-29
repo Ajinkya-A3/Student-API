@@ -1,0 +1,20 @@
+---
+# Source: student-api/templates/servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: student-api
+  namespace: student-api
+  labels:
+    app: student-api
+spec:
+  selector:
+    matchLabels:
+      app: student-api
+  namespaceSelector:
+    matchNames:
+      - student-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
