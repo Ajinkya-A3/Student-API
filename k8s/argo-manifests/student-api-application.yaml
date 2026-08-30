@@ -27,3 +27,10 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true
+      
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      jqPathExpressions:
+        - '.spec.volumeClaimTemplates[] | .apiVersion'
+        - '.spec.volumeClaimTemplates[] | .kind'
