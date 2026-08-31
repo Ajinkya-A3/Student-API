@@ -78,6 +78,22 @@ alloy:
           replacement  = "/var/log/pods/*$1/$2/*.log"
         }
 
+        // ------------------------------------------------------------
+        // Derive which container runtime produced this pod's logs, so
+        // loki.process below can route to the correct unwrap stage
+        // (stage.cri vs stage.docker) instead of running both blindly.
+        // __meta_kubernetes_pod_container_id looks like:
+        //   docker://<hash>  or  containerd://<hash>  or  cri-o://<hash>
+        // This extracts just the scheme ("docker", "containerd", "cri-o")
+        // into a temporary label used only for routing — it gets
+        // dropped in loki.process before the entry reaches Loki.
+        // ------------------------------------------------------------
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_id"]
+          regex         = "^(\\w+)://.+$"
+          target_label  = "tmp_container_runtime"
+        }
+
         // ----------------------------------------------------------
         // ONLY collect the student-api application container
         // ----------------------------------------------------------
@@ -115,16 +131,82 @@ alloy:
       // Process application logs
       // ------------------------------------------------------------
       loki.process "application_logs" {
-        // Parse CRI/containerd log format.
-        stage.cri {}
 
-        // Drop successful kubelet probe hits (/api/v1/health) , (api/v1/ready) and
-        // Prometheus scrape hits (/metrics) — both are periodic,
-        // always-200 infra traffic already covered elsewhere:
-        //   - /api/v1/health uptime is tracked by the blackbox Probe CR
-        //   - /metrics scrape success is tracked by `up{job="student-api"}`
-        // Only 200s are dropped, so a failing probe or scrape (5xx/timeout)
-        // still shows up in logs — that's the one case you actually want to see.
+        // --------------------------------------------------------
+        // Unwrap the container-runtime log envelope — routed by
+        // the tmp_container_runtime label set above, so only the
+        // stage matching the actual runtime for a given pod runs.
+        // This mirrors the pattern used by the official
+        // grafana/k8s-monitoring-helm chart, rather than running
+        // both stage.cri and stage.docker unconditionally on every
+        // line (which works, but silently no-ops one of them per
+        // line and generates avoidable internal debug-log noise).
+        // --------------------------------------------------------
+        stage.match {
+          selector = "{tmp_container_runtime=\"containerd\"}"
+          stage.cri {}
+        }
+        stage.match {
+          selector = "{tmp_container_runtime=\"docker\"}"
+          stage.docker {}
+        }
+
+        // --------------------------------------------------------
+        // Parse the app's own JSON (now unwrapped) and promote a
+        // few fields to Loki labels/structured metadata so you can
+        // filter with {level="warning"} or {event="duplicate_email"}
+        // instead of grepping the raw JSON string every time.
+        //
+        // Note: this only matches lines that ARE JSON — your app's
+        // logger.info()/logger.warning() calls. Uvicorn's access log
+        // lines (the "GET /... 200 OK" ones) aren't JSON, so this
+        // stage just no-ops on them — no error, no fields extracted,
+        // line passes through as-is.
+        // --------------------------------------------------------
+        stage.json {
+          expressions = {
+            level     = "level",
+            event     = "event",
+            func_name = "func_name",
+          }
+        }
+
+        stage.labels {
+          values = {
+            level = "level",
+            event = "event",
+          }
+        }
+
+        // --------------------------------------------------------
+        // Drop tmp_container_runtime before shipping to Loki — it
+        // was only needed above to route to the right unwrap stage
+        // and has no value as a persisted label on every log line.
+        // --------------------------------------------------------
+        stage.label_drop {
+          values = ["tmp_container_runtime"]
+        }
+
+        // --------------------------------------------------------
+        // Drop noisy, always-200 infra polling traffic before it
+        // reaches Loki: kubelet liveness/readiness probes and
+        // Prometheus scrapes. These fire every few seconds forever
+        // and add no signal once you know the endpoint is healthy.
+        //
+        //   - /api/v1/health uptime is already tracked by the
+        //     blackbox-exporter Probe CR
+        //   - /metrics scrape success is already tracked by the
+        //     `up{job="student-api"}` Prometheus metric
+        //
+        // Only the "200 OK" variant of these is dropped — that's
+        // the deliberate, important part of the regex. A FAILING
+        // probe or scrape (5xx, timeout, connection refused) will
+        // NOT match "200 OK" and so will NOT be dropped — it stays
+        // in Loki, because that's exactly the one case you want to
+        // see. Real app traffic (POST /students, GET /students,
+        // duplicate_email JSON events, etc.) never matches this
+        // regex at all — so it's unaffected either way.
+        // --------------------------------------------------------
         stage.drop {
           source              = ""
           expression          = "(?i).*(api/v1/health|api/v1/ready|/metrics).*\"\\s+200\\s+OK.*"
