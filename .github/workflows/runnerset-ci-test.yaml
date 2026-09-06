@@ -170,6 +170,7 @@ jobs:
 
     defaults:
       run:
+        shell: bash
         working-directory: student-api
 
     env:
