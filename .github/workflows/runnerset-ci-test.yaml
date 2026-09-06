@@ -1,4 +1,4 @@
-name: student-api-ci
+name: student-api-ci-eks
 
 on:
   push:
