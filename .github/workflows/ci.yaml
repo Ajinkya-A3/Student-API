@@ -26,7 +26,7 @@ jobs:
   # =========================================================
   gitleaks:
     name: Gitleaks Secret Scan
-    runs-on: ubuntu-latest
+    runs-on: eks-spot-amd
 
     steps:
       - name: Checkout Code
@@ -44,7 +44,7 @@ jobs:
   # =========================================================
   semgrep:
     name: semgrep-oss/scan
-    runs-on: ubuntu-latest
+    runs-on: eks-spot-amd
     needs: gitleaks
 
     container:
@@ -91,7 +91,7 @@ jobs:
   # =========================================================
   build-test-lint:
     name: Build, Test & Lint
-    runs-on: ubuntu-latest
+    runs-on: eks-spot-amd
     needs: semgrep
 
     defaults:
@@ -121,7 +121,7 @@ jobs:
   # =========================================================
   docker-build-scan-push:
     name: Docker Build, Scan & Push
-    runs-on: ubuntu-latest
+    runs-on: eks-spot-amd
     needs: build-test-lint
 
     defaults:
@@ -206,7 +206,7 @@ jobs:
   # =========================================================
   update-manifest:
     name: Bump image tag in Helm values
-    runs-on: ubuntu-latest
+    runs-on: eks-spot-amd
     needs: docker-build-scan-push
 
     steps:
