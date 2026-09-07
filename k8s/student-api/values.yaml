@@ -17,7 +17,7 @@ application:
 
   image:
     repository: at1asflame/student-api
-    tag: "3111caf"
+    tag: "121616f"
     pullPolicy: IfNotPresent
 
   service:
