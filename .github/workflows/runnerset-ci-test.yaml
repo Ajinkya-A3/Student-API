@@ -1,14 +1,6 @@
 name: student-api-ci-eks
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'student-api/**'
-  pull_request:
-    paths:
-      - 'student-api/**'
   workflow_dispatch: {}   # manual trigger
 
 permissions:
