@@ -21,7 +21,7 @@ jobs:
   # =========================================================
   gitleaks:
     name: Gitleaks Secret Scan
-    runs-on: eks-spot-amd
+    runs-on: arc-runner
 
     container:
       image: ghcr.io/catthehacker/ubuntu:act-22.04   # ships git + node + glibc
@@ -33,7 +33,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
@@ -53,7 +53,7 @@ jobs:
   # =========================================================
   semgrep:
     name: semgrep-oss/scan
-    runs-on: eks-spot-amd
+    runs-on: arc-runner
     needs: gitleaks
 
     container:
@@ -102,7 +102,7 @@ jobs:
   # =========================================================
   build-test-lint:
     name: Build, Test & Lint
-    runs-on: eks-spot-amd
+    runs-on: arc-runner
     needs: semgrep
 
     container:
@@ -131,38 +131,19 @@ jobs:
         run: make lint
 
   # =========================================================
-  # 4️⃣ BUILD → TRIVY SCAN → PUSH (GATED) — daemonless rewrite
-  # kubernetes/kubernetes-novolume mode gives every job container its
-  # own pod, but never a Docker daemon or --privileged access, so the
-  # old docker/build-push-action + local `docker` CLI chain cannot work
-  # here. Replaced with:
-  #   - Kaniko: builds the image straight to an OCI tarball, no daemon,
-  #     no privileged pod needed.
-  #   - Trivy: scans the tarball directly (image never touches a
-  #     registry or a daemon until it's proven clean).
-  #   - crane: pushes the already-built tarball — also daemonless.
-  # Each `uses: docker://...` step runs in its own pod under
-  # kubernetes/kubernetes-novolume mode, sharing the same job work
-  # volume, so the tarball built by Kaniko is visible to Trivy and crane
-  # in later steps.
-  #
-  # NOTE: this is a genuine behavior change from the old job, not just
-  # a container add — test it end to end before relying on it. crane
-  # needs registry auth wired up (below via a config.json written to
-  # the shared workspace); confirm the auth step actually produces a
-  # config crane will read before trusting the push step in production.
+  # 4️⃣ BUILD → TRIVY SCAN → PUSH (GATED) — dind runner
+  # arc-runner-dind gives the job pod a real Docker daemon (DinD sidecar),
+  # so we're back to the standard docker/build-push-action + trivy-action
+  # flow — no Kaniko/crane workaround needed. Build local (load: true),
+  # scan, then push only if Trivy exits clean.
   # =========================================================
   docker-build-scan-push:
-    name: Build, Scan & Push (daemonless)
-    runs-on: eks-spot-amd
+    name: Docker Build, Scan & Push
+    runs-on: arc-runner-dind
     needs: build-test-lint
-
-    container:
-      image: ghcr.io/catthehacker/ubuntu:act-22.04
 
     defaults:
       run:
-        shell: bash
         working-directory: student-api
 
     env:
@@ -178,28 +159,38 @@ jobs:
           echo "BRANCH_NAME=${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
 
-      - name: Build image to tarball with Kaniko (no push)
-        uses: docker://gcr.io/kaniko-project/executor:v1.23.2
-        with:
-          args: >-
-            --dockerfile=Dockerfile
-            --context=dir:///github/workspace/student-api
-            --no-push
-            --tarPath=/github/workspace/student-api/image.tar
-            --destination=${{ env.IMAGE }}:${{ env.SHORT_SHA }}
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Scan built tarball with Trivy
-        uses: docker://aquasec/trivy:0.69.2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker Login
+        uses: docker/login-action@v3
         with:
-          args: >-
-            image
-            --input student-api/image.tar
-            --scanners vuln
-            --format table
-            --output student-api/trivy-${{ env.REPO_NAME }}-${{ env.BRANCH_NAME }}-${{ env.SHORT_SHA }}.txt
-            --exit-code 1
-            --ignore-unfixed
-            --severity CRITICAL,HIGH
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Build locally first (no push) so Trivy can scan before anything ships
+      - name: Build Docker Image (local)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./student-api
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE }}:${{ env.SHORT_SHA }}
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@v0.34.0
+        with:
+          version: v0.69.2
+          image-ref: ${{ env.IMAGE }}:${{ env.SHORT_SHA }}
+          scanners: vuln
+          format: table
+          output: trivy-${{ env.REPO_NAME }}-${{ env.BRANCH_NAME }}-${{ env.SHORT_SHA }}.txt
+          exit-code: 1
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
 
       - name: Upload Trivy Report
         if: always()
@@ -208,38 +199,17 @@ jobs:
           name: trivy-${{ env.REPO_NAME }}-${{ env.BRANCH_NAME }}-${{ env.SHORT_SHA }}
           path: student-api/trivy-${{ env.REPO_NAME }}-${{ env.BRANCH_NAME }}-${{ env.SHORT_SHA }}.txt
 
-      # Auth for crane — writes a docker-style config.json into the shared
-      # work volume so the later crane steps (each a separate pod) can read it.
-      - name: crane auth login
-        if: success()
-        uses: docker://gcr.io/go-containerregistry/crane:debug
-        env:
-          DOCKER_CONFIG: /github/workspace/student-api/.docker
-        with:
-          entrypoint: crane
-          args: >-
-            auth login docker.io
-            -u ${{ secrets.DOCKERHUB_USERNAME }}
-            -p ${{ secrets.DOCKERHUB_TOKEN }}
-
       # Only pushes if Trivy passed (job would already have failed otherwise)
-      - name: Push :sha tag
+      - name: Push Docker Image
         if: success()
-        uses: docker://gcr.io/go-containerregistry/crane:debug
-        env:
-          DOCKER_CONFIG: /github/workspace/student-api/.docker
+        uses: docker/build-push-action@v6
         with:
-          entrypoint: crane
-          args: push student-api/image.tar ${{ env.IMAGE }}:${{ env.SHORT_SHA }}
-
-      - name: Push :latest tag
-        if: success()
-        uses: docker://gcr.io/go-containerregistry/crane:debug
-        env:
-          DOCKER_CONFIG: /github/workspace/student-api/.docker
-        with:
-          entrypoint: crane
-          args: push student-api/image.tar ${{ env.IMAGE }}:latest
+          context: ./student-api
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ env.SHORT_SHA }}
 
       - name: Print Summary
         if: success()
@@ -251,11 +221,10 @@ jobs:
 
   # =========================================================
   # 5️⃣ UPDATE GITOPS VALUES FILE (ArgoCD source of truth)
-  # Needs: git for commit/push — same reasoning as the gitleaks job.
   # =========================================================
   update-manifest:
     name: Bump image tag in Helm values
-    runs-on: eks-spot-amd
+    runs-on: arc-runner
     needs: docker-build-scan-push
 
     container:
